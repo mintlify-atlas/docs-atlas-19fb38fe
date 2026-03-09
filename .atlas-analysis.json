@@ -1,0 +1,81 @@
+{
+  "projectType": "saas",
+  "projectName": "NoOCR",
+  "projectDescription": "AI-powered document exploration tool that processes PDFs with visual embeddings and enables search and question-answering without traditional OCR.",
+  "theme": "palm",
+  "primaryColor": "#040404",
+  "lightColor": null,
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/case-management",
+              "features/visual-search",
+              "features/ai-qa"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/overview",
+              "deployment/prerequisites",
+              "deployment/docker",
+              "deployment/development"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/backend",
+              "architecture/frontend",
+              "architecture/llm-serving"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/overview",
+              "api/case-endpoints",
+              "api/search-endpoints",
+              "api/llm-endpoints"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "PDF collection management with case-based organization",
+    "Vector-based visual search using ColPali embeddings",
+    "AI question-answering on document images via Qwen2-VL",
+    "Automated PDF ingestion to Hugging Face datasets",
+    "LanceDB vector storage for efficient retrieval"
+  ],
+  "publicApiSurface": [
+    "POST /create_case",
+    "GET /get_cases",
+    "GET /get_case/{case_name}",
+    "DELETE /delete_case/{case_name}",
+    "POST /search",
+    "POST /vllm_call",
+    "GET /health"
+  ]
+}
