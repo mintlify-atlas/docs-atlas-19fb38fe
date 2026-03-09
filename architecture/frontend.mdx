@@ -1,0 +1,577 @@
+---
+title: "Frontend Architecture"
+description: "React/TypeScript frontend implementation"
+icon: "browser"
+---
+
+## Overview
+
+The NoOCR frontend is a modern React application built with TypeScript, Vite, and Tailwind CSS. It provides a clean interface for uploading documents, managing cases, and performing visual search.
+
+## Technology Stack
+
+<CardGroup cols={2}>
+  <Card title="React 18" icon="react">
+    Component-based UI with hooks and modern patterns
+  </Card>
+  <Card title="TypeScript" icon="code">
+    Type-safe JavaScript for better developer experience
+  </Card>
+  <Card title="Vite" icon="bolt">
+    Lightning-fast build tool and dev server
+  </Card>
+  <Card title="Tailwind CSS" icon="palette">
+    Utility-first CSS framework for rapid styling
+  </Card>
+  <Card title="Zustand" icon="database">
+    Lightweight state management without boilerplate
+  </Card>
+  <Card title="Supabase" icon="shield">
+    Authentication and user management
+  </Card>
+  <Card title="React Router" icon="route">
+    Client-side routing for multi-page experience
+  </Card>
+  <Card title="Lucide React" icon="feather">
+    Beautiful icon library
+  </Card>
+</CardGroup>
+
+## Project Structure
+
+```
+no-ocr-ui/
+├── src/
+│   ├── components/          # React components
+│   │   ├── About.tsx       # Landing page
+│   │   ├── Case.tsx        # Case detail view
+│   │   ├── CreateCase.tsx  # PDF upload interface
+│   │   ├── Search.tsx      # Search interface
+│   │   ├── Navbar.tsx      # Navigation bar
+│   │   ├── about/          # Landing page sections
+│   │   ├── auth/           # Authentication components
+│   │   ├── case/           # Case management components
+│   │   ├── collection/     # Collection-related UI
+│   │   └── shared/         # Reusable components
+│   ├── stores/             # Zustand state stores
+│   ├── types/              # TypeScript type definitions
+│   ├── config/             # Configuration files
+│   ├── hooks/              # Custom React hooks
+│   ├── lib/                # Utility libraries
+│   ├── utils/              # Helper functions
+│   ├── App.tsx             # Main app component
+│   └── main.tsx            # Entry point
+├── package.json
+├── vite.config.ts
+├── tailwind.config.js
+└── tsconfig.json
+```
+
+## Dependencies
+
+From `package.json`:
+
+```json
+{
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.7",
+    "lucide-react": "^0.263.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.22.3",
+    "zustand": "^4.5.2"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.18",
+    "eslint": "^9.9.1",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5.5.3",
+    "vite": "^5.4.19"
+  }
+}
+```
+
+## Core Components
+
+### Search Component
+
+The search interface handles semantic search and visual QA.
+
+**Source:** `no-ocr-ui/src/components/Search.tsx`
+
+```typescript
+type SearchResult = {
+  image_base64: string;
+  pdf_name: string;
+  pdf_page: number;
+  score: number;
+};
+
+export default function Search() {
+  const { user } = useAuthStore();
+  const [selectedCase, setSelectedCase] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [answers, setAnswers] = useState<{ [key: number]: { answer: string } }>({});
+  const [cases, setCases] = useState<Case[]>([]);
+  
+  // Load cases on mount
+  useEffect(() => {
+    async function fetchCases() {
+      const response = await fetch(`${noOcrApiUrl}/get_cases?user_id=${user?.id}`);
+      const data = await response.json();
+      setCases(data.cases || []);
+    }
+    fetchCases();
+  }, [user]);
+  
+  // Handle search submission
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedCase || !searchQuery) return;
+    
+    setIsSearching(true);
+    setResults([]);
+    setAnswers({});
+    
+    try {
+      // Call search API
+      const response = await fetch(`${noOcrApiUrl}/search`, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' },
+        body: new URLSearchParams({
+          user_query: searchQuery,
+          user_id: user?.id || '',
+          case_name: selectedCase,
+        }),
+      });
+      
+      const data = await response.json();
+      setResults(data.search_results || []);
+      
+      // Fetch answers for each result
+      data.search_results.forEach((result: SearchResult, index: number) => {
+        fetchAnswer(searchQuery, selectedCase, result.pdf_name, result.pdf_page)
+          .then(answer => {
+            setAnswers(prevAnswers => ({ ...prevAnswers, [index]: answer }));
+          });
+      });
+    } catch (error) {
+      console.error('Search failed:', error);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+  
+  // Fetch VLM answer for a specific page
+  const fetchAnswer = async (
+    userQuery: string,
+    caseName: string,
+    pdfName: string,
+    pdfPage: number
+  ) => {
+    try {
+      const response = await fetch(`${noOcrApiUrl}/vllm_call`, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' },
+        body: new URLSearchParams({
+          user_query: userQuery,
+          user_id: user?.id || '',
+          case_name: caseName,
+          pdf_name: pdfName,
+          pdf_page: pdfPage.toString(),
+        }),
+      });
+      
+      const data = await response.json();
+      return data;
+    } catch (error) {
+      console.error('Fetching answer failed:', error);
+      return { answer: 'NA' };
+    }
+  };
+  
+  // Render search form and results...
+}
+```
+
+**Key Features:**
+- **Case Selection**: Dropdown to select which case to search
+- **Search Form**: Text input for semantic queries
+- **Async Results**: Search results appear first, then VLM answers load progressively
+- **Image Display**: Base64-encoded images displayed with metadata
+- **Modal View**: Click to enlarge images
+
+### CreateCase Component
+
+Handles PDF uploads and case creation.
+
+**Source:** `no-ocr-ui/src/components/CreateCase.tsx`
+
+This component provides:
+- File upload interface (drag & drop or click)
+- PDF validation (only .pdf files)
+- Case naming
+- Progress tracking during upload
+- Background processing status
+
+### Case Component
+
+Displays case details and manages individual cases.
+
+**Source:** `no-ocr-ui/src/components/Case.tsx`
+
+Features:
+- Case metadata display
+- File list
+- Processing status
+- Delete case functionality
+- Navigate to search
+
+### Navbar Component
+
+Provides navigation and authentication UI.
+
+**Source:** `no-ocr-ui/src/components/Navbar.tsx`
+
+Includes:
+- Logo and branding
+- Navigation links
+- User authentication status
+- Login/logout controls
+
+## State Management (Zustand)
+
+The app uses Zustand for lightweight state management.
+
+**Auth Store Example:**
+
+```typescript
+import { create } from 'zustand';
+import { User } from '@supabase/supabase-js';
+
+interface AuthState {
+  user: User | null;
+  setUser: (user: User | null) => void;
+}
+
+export const useAuthStore = create<AuthState>((set) => ({
+  user: null,
+  setUser: (user) => set({ user }),
+}));
+```
+
+**Usage in Components:**
+
+```typescript
+import { useAuthStore } from '../stores/authStore';
+
+function MyComponent() {
+  const { user, setUser } = useAuthStore();
+  
+  // Access user.id for API calls
+  // Call setUser(newUser) to update state
+}
+```
+
+## API Integration
+
+The frontend communicates with the FastAPI backend via REST endpoints.
+
+**Configuration:** `no-ocr-ui/src/config/api.ts`
+
+```typescript
+export const noOcrApiUrl = import.meta.env.VITE_REACT_APP_API_URI;
+```
+
+**Environment Variables:** `.env`
+
+```bash
+VITE_SUPABASE_URL="https://your-project.supabase.co"
+VITE_SUPABASE_ANON_KEY="your-anon-key"
+VITE_REACT_APP_API_URI="http://localhost:8000"
+```
+
+### API Call Pattern
+
+All API calls use the Fetch API with FormData for multipart uploads:
+
+```typescript
+// Example: Search API call
+const response = await fetch(`${noOcrApiUrl}/search`, {
+  method: 'POST',
+  headers: { 'Accept': 'application/json' },
+  body: new URLSearchParams({
+    user_query: searchQuery,
+    user_id: user?.id || '',
+    case_name: selectedCase,
+  }),
+});
+
+const data = await response.json();
+```
+
+```typescript
+// Example: File upload
+const formData = new FormData();
+formData.append('user_id', user?.id || '');
+formData.append('case_name', caseName);
+files.forEach(file => formData.append('files', file));
+
+const response = await fetch(`${noOcrApiUrl}/create_case`, {
+  method: 'POST',
+  body: formData,
+});
+```
+
+## Authentication (Supabase)
+
+The app uses Supabase for user authentication.
+
+**Setup:**
+
+```typescript
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+```
+
+**Auth Components:**
+
+- `LoginForm.tsx`: Email/password login
+- `RegisterForm.tsx`: New user registration
+- `LogoutButton.tsx`: Sign out functionality
+- `AuthGuard.tsx`: Protected route wrapper
+
+**Example: Protected Route**
+
+```typescript
+import { Navigate } from 'react-router-dom';
+import { useAuthStore } from '../../stores/authStore';
+
+export function AuthGuard({ children }) {
+  const { user } = useAuthStore();
+  
+  if (!user) {
+    return <Navigate to="/login" />;
+  }
+  
+  return children;
+}
+```
+
+## Styling (Tailwind CSS)
+
+The app uses Tailwind CSS for all styling.
+
+**Example: Search Results Card**
+
+```tsx
+<div className="bg-gradient-to-r from-blue-50 to-blue-100 p-6 rounded-xl shadow-lg border border-blue-200 grid grid-cols-3 gap-6">
+  <div className="col-span-2">
+    <img
+      src={`data:image/jpeg;base64,${result.image_base64}`}
+      alt={`Page ${result.pdf_page} of ${result.pdf_name}`}
+      className="w-full h-auto rounded-lg border border-blue-300 cursor-pointer"
+      onClick={() => openModal(result.image_base64)}
+    />
+  </div>
+  <div className="flex flex-col justify-between">
+    <div className="bg-blue-50 p-5 rounded-xl shadow-md border border-blue-200">
+      <h3 className="font-semibold text-blue-800 text-lg">
+        Metadata: <span className="text-blue-600">{result.pdf_name}, Page {result.pdf_page}</span>
+      </h3>
+    </div>
+    <div className="bg-blue-50 p-5 rounded-xl shadow-md border border-blue-200 mt-2">
+      <h3 className="font-semibold text-blue-800">Answer:</h3>
+      <p className="mt-2 text-md text-blue-700">
+        {answers[index] ? answers[index].answer : <LoadingSpinner />}
+      </p>
+    </div>
+  </div>
+</div>
+```
+
+**Common Patterns:**
+- `bg-gradient-to-r from-blue-50 to-blue-100`: Gradient backgrounds
+- `rounded-xl shadow-lg`: Rounded corners with shadows
+- `border border-blue-200`: Subtle borders
+- `hover:bg-blue-700`: Interactive hover states
+
+## Routing
+
+The app uses React Router for navigation.
+
+**Routes:**
+
+```typescript
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+
+function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<About />} />
+        <Route path="/login" element={<LoginForm />} />
+        <Route path="/register" element={<RegisterForm />} />
+        <Route
+          path="/search"
+          element={
+            <AuthGuard>
+              <Search />
+            </AuthGuard>
+          }
+        />
+        <Route
+          path="/create-case"
+          element={
+            <AuthGuard>
+              <CreateCase />
+            </AuthGuard>
+          }
+        />
+        <Route
+          path="/case/:caseName"
+          element={
+            <AuthGuard>
+              <Case />
+            </AuthGuard>
+          }
+        />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+```
+
+## Development Workflow
+
+### Running the Dev Server
+
+```bash
+cd no-ocr-ui
+npm install
+npm run dev
+```
+
+Vite will start the dev server at `http://localhost:5173` with:
+- Hot module replacement (HMR)
+- Fast refresh for React
+- TypeScript type checking
+
+### Building for Production
+
+```bash
+npm run build
+```
+
+Produces optimized static files in `dist/`:
+- Minified JavaScript bundles
+- Optimized CSS
+- Asset optimization
+- Tree-shaking for smaller bundle size
+
+### Linting
+
+```bash
+npm run lint
+```
+
+Runs ESLint with React-specific rules.
+
+## Performance Optimizations
+
+### Code Splitting
+
+Vite automatically code-splits by route, loading only necessary JavaScript for each page.
+
+### Image Optimization
+
+- Backend resizes images to 512x512 before sending
+- JPEG format with progressive encoding
+- Base64 encoding for inline display
+
+### Async Answer Loading
+
+Search results appear immediately, while VLM answers load progressively:
+
+```typescript
+// Show results first
+setResults(data.search_results || []);
+
+// Then fetch answers asynchronously
+data.search_results.forEach((result: SearchResult, index: number) => {
+  fetchAnswer(searchQuery, selectedCase, result.pdf_name, result.pdf_page)
+    .then(answer => {
+      setAnswers(prevAnswers => ({ ...prevAnswers, [index]: answer }));
+    });
+});
+```
+
+This provides instant feedback while answers generate.
+
+## Error Handling
+
+All API calls include error handling:
+
+```typescript
+try {
+  const response = await fetch(url, options);
+  if (!response.ok) throw new Error('Network response was not ok');
+  const data = await response.json();
+  // Process data
+} catch (error) {
+  console.error('Operation failed:', error);
+  // Show user-friendly error message
+}
+```
+
+## Type Safety
+
+TypeScript ensures type safety across the application.
+
+**Example Types:**
+
+```typescript
+// src/types/collection.ts
+export interface Case {
+  id: string;
+  name: string;
+  status: 'processing' | 'done' | 'error';
+  number_of_pdfs: number;
+  files: string[];
+  case_dir: string;
+}
+
+export interface SearchResult {
+  image_base64: string;
+  pdf_name: string;
+  pdf_page: number;
+  score: number;
+}
+
+export interface ImageAnswer {
+  answer: string;
+}
+```
+
+## Accessibility
+
+The UI follows basic accessibility practices:
+
+- Semantic HTML elements
+- ARIA labels for icons
+- Keyboard navigation support
+- Focus states on interactive elements
+- Alt text for images
+
+## Next Steps
+
+- [Backend Architecture](/architecture/backend) - Learn about the API endpoints the frontend calls
+- [LLM Serving](/architecture/llm-serving) - Understand the embedding and inference services

@@ -1,0 +1,178 @@
+---
+title: API Overview
+description: Overview of the NoOCR API for document exploration without OCR
+---
+
+## Introduction
+
+The NoOCR API provides AI-powered document exploration capabilities without traditional OCR. Upload PDF documents, search through them using natural language, and get AI-powered answers from specific pages.
+
+## Base URL
+
+The API is typically hosted at:
+
+```
+http://localhost:8000  # Local development
+https://api.noocr.com  # Production (example)
+```
+
+All endpoints are prefixed with the base URL.
+
+## Authentication
+
+Currently, the API uses a simple user ID-based authentication model. Each request requires a `user_id` parameter to identify and isolate user data. There are no API keys or OAuth tokens required.
+
+<Warning>
+  In production, implement proper authentication mechanisms like API keys or OAuth 2.0.
+</Warning>
+
+## Common Request Format
+
+Most endpoints accept `form-data` requests (multipart/form-data or application/x-www-form-urlencoded). This is particularly useful for file uploads and text parameters.
+
+## Common Response Patterns
+
+All successful responses return JSON with appropriate HTTP status codes:
+
+- `200 OK` - Successful request
+- `400 Bad Request` - Invalid parameters or validation errors
+- `404 Not Found` - Resource not found
+- `500 Internal Server Error` - Server-side errors
+
+### Success Response
+```json
+{
+  "name": "case_name",
+  "status": "processing",
+  "number_of_pdfs": 3,
+  "files": ["document1.pdf", "document2.pdf"],
+  "case_dir": "/path/to/case"
+}
+```
+
+### Error Response
+```json
+{
+  "detail": "Invalid user_id provided."
+}
+```
+
+## Error Handling
+
+The API uses standard HTTP status codes and returns error details in the `detail` field:
+
+| Status Code | Description |
+|------------|-------------|
+| 400 | Invalid parameters (e.g., invalid user_id, case_name, or missing required fields) |
+| 404 | Resource not found (case, dataset, or image not found) |
+| 500 | Internal server error (failed to process, load dataset, etc.) |
+
+### Error Examples
+
+**Invalid Identifier:**
+```json
+{
+  "detail": "Invalid user_id provided."
+}
+```
+
+**Resource Not Found:**
+```json
+{
+  "detail": "Case info not found."
+}
+```
+
+**Processing Error:**
+```json
+{
+  "detail": "Failed to load case dataset."
+}
+```
+
+## Health Check
+
+Check if the API is running and healthy:
+
+<CodeGroup>
+```bash cURL
+curl http://localhost:8000/health
+```
+
+```javascript JavaScript
+fetch('http://localhost:8000/health')
+  .then(response => response.json())
+  .then(data => console.log(data));
+```
+
+```python Python
+import requests
+
+response = requests.get('http://localhost:8000/health')
+print(response.json())
+```
+</CodeGroup>
+
+**Response:**
+```json
+{
+  "status": "ok"
+}
+```
+
+## Available Endpoints
+
+The NoOCR API is organized into three main categories:
+
+### Case Management
+
+Manage document cases (collections of PDFs):
+
+- `POST /create_case` - Create a new case with PDF uploads
+- `GET /get_cases` - List all cases for a user
+- `GET /get_case/{case_name}` - Get details of a specific case
+- `DELETE /delete_case/{case_name}` - Delete a case
+
+See [Case Endpoints](/api/case-endpoints) for detailed documentation.
+
+### Search
+
+Search through documents using natural language:
+
+- `POST /search` - Search images by text query
+
+See [Search Endpoints](/api/search-endpoints) for detailed documentation.
+
+### AI Question-Answering
+
+Get AI-powered answers from specific document pages:
+
+- `POST /vllm_call` - Ask questions about specific pages
+
+See [LLM Endpoints](/api/llm-endpoints) for detailed documentation.
+
+## Rate Limiting
+
+Currently, there are no rate limits enforced. However, processing-heavy operations like case creation and AI calls may take several seconds to complete.
+
+<Tip>
+  The `/create_case` endpoint processes files in the background, so it returns immediately with a `processing` status. Check the case status later to see when processing is complete.
+</Tip>
+
+## CORS
+
+The API allows cross-origin requests from all origins (`*`). In production, you should restrict this to specific allowed origins.
+
+## Identifier Validation
+
+All user IDs and case names must match the pattern `^[\w\-]+$` (alphanumeric characters, underscores, and hyphens only). This prevents path traversal attacks.
+
+**Valid identifiers:**
+- `user123`
+- `my-case`
+- `case_name_2024`
+
+**Invalid identifiers:**
+- `../../../etc/passwd`
+- `user@example.com`
+- `case name with spaces`

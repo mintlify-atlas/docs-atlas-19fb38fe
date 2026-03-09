@@ -1,0 +1,486 @@
+---
+title: 'AI Question-Answering'
+description: 'Ask questions about document pages using Qwen2-VL vision-language model'
+---
+
+## Overview
+
+NoOCR's AI Q&A feature allows you to ask natural language questions about specific document pages and receive accurate, context-aware answers. This is powered by **Qwen2-VL-7B-Instruct**, a state-of-the-art vision-language model that can understand and reason about document images.
+
+### How It Works
+
+1. **Target Selection**: You specify which PDF page to analyze (from search results or directly)
+2. **Image Retrieval**: The page image is loaded from the HuggingFace dataset
+3. **Vision-Language Processing**: The image and your question are sent to Qwen2-VL
+4. **Answer Generation**: The model generates a structured JSON response with the answer
+5. **Validation**: If the image doesn't contain relevant information, the model returns "NA"
+
+<Note>
+  AI Q&A is designed to work seamlessly with visual search results. Search for relevant pages first, then ask detailed questions about specific pages.
+</Note>
+
+## The Q&A API
+
+Use the `POST /vllm_call` endpoint to ask questions about a document page.
+
+### API Endpoint
+
+```python
+POST /vllm_call
+```
+
+<ParamField body="user_query" type="string" required>
+  Question to ask about the document page (e.g., "What is the total amount?", "Who signed this contract?")
+</ParamField>
+
+<ParamField body="user_id" type="string" required>
+  User ID who owns the case
+</ParamField>
+
+<ParamField body="case_name" type="string" required>
+  Name of the case containing the document
+</ParamField>
+
+<ParamField body="pdf_name" type="string" required>
+  Filename of the PDF (e.g., "invoice.pdf")
+</ParamField>
+
+<ParamField body="pdf_page" type="integer" required>
+  Page number to analyze (1-indexed)
+</ParamField>
+
+### Request Example
+
+```python
+import requests
+
+url = "https://your-noocr-instance.com/vllm_call"
+
+data = {
+    'user_query': 'What is the invoice total and due date?',
+    'user_id': 'user_123',
+    'case_name': 'financial_docs_2024',
+    'pdf_name': 'invoice.pdf',
+    'pdf_page': 1
+}
+
+response = requests.post(url, data=data)
+result = response.json()
+
+print(f"Answer: {result['answer']}")
+```
+
+### Response Example
+
+```json
+{
+  "answer": "The invoice total is $2,450.00 and the due date is March 15, 2024."
+}
+```
+
+<Warning>
+  If the image doesn't contain information relevant to the query, the API returns `{"answer": "NA"}`. This prevents hallucination and ensures accurate responses.
+</Warning>
+
+## Combined Search + Q&A Workflow
+
+The typical workflow combines visual search and AI Q&A:
+
+```python
+import requests
+
+base_url = "https://your-noocr-instance.com"
+user_id = "user_123"
+case_name = "financial_docs_2024"
+
+# Step 1: Search for relevant pages
+search_response = requests.post(f"{base_url}/search", data={
+    'user_query': 'invoice or billing document',
+    'user_id': user_id,
+    'case_name': case_name
+})
+
+search_results = search_response.json()['search_results']
+
+# Step 2: Ask questions about the top result
+top_result = search_results[0]
+qa_response = requests.post(f"{base_url}/vllm_call", data={
+    'user_query': 'What is the total amount and due date?',
+    'user_id': user_id,
+    'case_name': case_name,
+    'pdf_name': top_result['pdf_name'],
+    'pdf_page': top_result['pdf_page']
+})
+
+answer = qa_response.json()['answer']
+print(f"Found on {top_result['pdf_name']}, page {top_result['pdf_page']}")
+print(f"Answer: {answer}")
+```
+
+## Implementation Details
+
+The Q&A functionality is implemented in `np_ocr/api.py:119-166`:
+
+```python
+@app.post("/vllm_call")
+def vllm_call(
+    user_query: str = Form(...),
+    user_id: str = Form(...),
+    case_name: str = Form(...),
+    pdf_name: str = Form(...),
+    pdf_page: int = Form(...),
+) -> ImageAnswer:
+    # 1. Validate inputs
+    validate_identifier(user_id, "user_id")
+    validate_identifier(case_name, "case_name")
+    validate_identifier(pdf_name, "pdf_name")
+    if pdf_page <= 0:
+        raise HTTPException(status_code=400, detail="pdf_page must be positive.")
+
+    # 2. Load dataset
+    dataset_path = os.path.join(settings.STORAGE_DIR, user_id, case_name, settings.HF_DATASET_DIRNAME)
+    if not os.path.exists(dataset_path):
+        raise HTTPException(status_code=404, detail="Dataset for this case not found.")
+    
+    dataset = load_from_disk(dataset_path)
+
+    # 3. Find the specific page image
+    image_data = None
+    for data in dataset:
+        if data["pdf_name"] == pdf_name and data["pdf_page"] == pdf_page:
+            image_data = data["image"]
+            break
+
+    if image_data is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Image not found in the dataset for the given PDF name and page number."
+        )
+
+    # 4. Call vision-language model
+    image_answer = call_vllm(
+        image_data,
+        user_query,
+        settings.VLLM_URL,
+        settings.VLLM_API_KEY,
+        settings.VLLM_MODEL
+    )
+
+    return image_answer
+```
+
+## The Qwen2-VL Prompt Template
+
+The `call_vllm` function in `np_ocr/search.py:142-194` constructs a specialized prompt:
+
+```python
+def call_vllm(image_data: PIL.Image.Image, user_query: str, base_url: str, api_key: str, model: str) -> ImageAnswer:
+    prompt = f"""
+    Based on the user's query:
+    ###
+    {user_query}
+    ###
+
+    and the provided image, determine if the image contains enough information to answer the query.
+    If it does, provide the most accurate answer possible based on the image.
+    If it does not, respond with the exact phrase "NA".
+
+    Please return your response in valid JSON with the structure:
+    {{
+        "answer": "Answer text or NA"
+    }}
+    """
+
+    # Resize image to 512x512 max for efficiency
+    max_size = (512, 512)
+    image_data.thumbnail(max_size)
+    
+    # Convert to base64
+    buffered = BytesIO()
+    image_data.save(buffered, format="JPEG")
+    img_b64_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+    # Call vLLM with structured output
+    client = OpenAI(base_url=base_url, api_key=api_key)
+    completion = client.beta.chat.completions.parse(
+        model=model,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{img_b64_str}"},
+                    },
+                ],
+            }
+        ],
+        response_format=ImageAnswer,
+        extra_body=dict(guided_decoding_backend="outlines"),
+    )
+    
+    message = completion.choices[0].message
+    return message.parsed
+```
+
+Key aspects of the implementation:
+
+1. **Relevance Check**: The prompt instructs the model to return "NA" if the image doesn't answer the query
+2. **Image Optimization**: Images are resized to max 512x512 pixels to reduce latency
+3. **Structured Output**: Uses Pydantic schemas with guided decoding to ensure valid JSON responses
+4. **Base64 Encoding**: Images are encoded as data URLs for the vision API
+
+See the full implementation in `np_ocr/search.py:142-194`.
+
+## Structured Output with Pydantic
+
+NoOCR uses Pydantic schemas to ensure consistent, parseable responses:
+
+```python
+class ImageAnswer(BaseModel):
+    answer: str
+```
+
+This schema is passed to the vLLM API via the OpenAI client:
+
+```python
+completion = client.beta.chat.completions.parse(
+    model="Qwen2-VL-7B-Instruct",
+    messages=[...],
+    response_format=ImageAnswer,
+    extra_body=dict(guided_decoding_backend="outlines")
+)
+```
+
+The `guided_decoding_backend="outlines"` parameter enforces schema compliance during generation, preventing malformed JSON.
+
+## Image Retrieval from Dataset
+
+Document page images are stored in HuggingFace datasets and retrieved by matching `pdf_name` and `pdf_page`:
+
+```python
+from datasets import load_from_disk
+
+dataset_path = f"storage/{user_id}/{case_name}/hf_dataset"
+dataset = load_from_disk(dataset_path)
+
+image_data = None
+for data in dataset:
+    if data["pdf_name"] == pdf_name and data["pdf_page"] == pdf_page:
+        image_data = data["image"]
+        break
+```
+
+From `np_ocr/api.py:149-154`.
+
+<Note>
+  The HuggingFace dataset stores images as PIL Image objects, enabling efficient loading and manipulation without re-parsing PDFs.
+</Note>
+
+## Example Questions by Document Type
+
+<AccordionGroup>
+  <Accordion title="Financial Documents">
+    **Invoices:**
+    - "What is the invoice number and total amount?"
+    - "When is the payment due?"
+    - "What items are listed on this invoice?"
+
+    **Receipts:**
+    - "What was purchased and for how much?"
+    - "What is the transaction date and merchant name?"
+    - "Is there a tax amount shown?"
+
+    **Financial Statements:**
+    - "What is the net income for this period?"
+    - "What are the total assets and liabilities?"
+    - "Show me the revenue breakdown by category"
+  </Accordion>
+
+  <Accordion title="Legal Documents">
+    **Contracts:**
+    - "What is the contract start date and duration?"
+    - "Who are the parties to this agreement?"
+    - "What are the termination conditions?"
+
+    **Agreements:**
+    - "What is the payment schedule?"
+    - "Are there any penalty clauses?"
+    - "What are the key obligations?"
+  </Accordion>
+
+  <Accordion title="Forms & Applications">
+    - "What information is being requested in this form?"
+    - "What is the applicant's name and contact information?"
+    - "What sections of the form are incomplete?"
+    - "What signatures are present?"
+  </Accordion>
+
+  <Accordion title="Technical Documents">
+    - "What components are shown in this diagram?"
+    - "Explain the workflow illustrated in this flowchart"
+    - "What are the technical specifications listed?"
+    - "What warnings or cautions are mentioned?"
+  </Accordion>
+</AccordionGroup>
+
+## Performance Optimization
+
+### Image Resizing
+
+Images are automatically resized to reduce inference time:
+
+```python
+max_size = (512, 512)
+image_data.thumbnail(max_size)
+```
+
+This maintains aspect ratio while reducing resolution. Benefits:
+- **Faster inference**: Smaller images process quicker
+- **Lower bandwidth**: Reduced data transfer to vLLM service
+- **Sufficient detail**: 512x512 is adequate for most document understanding tasks
+
+### Caching Considerations
+
+<Note>
+  Consider implementing response caching for repeated questions about the same pages. The API doesn't currently cache, but this could significantly improve performance for common queries.
+</Note>
+
+## Configuration
+
+Q&A behavior is controlled by environment variables:
+
+```bash
+# vLLM service endpoint
+VLLM_URL=https://vllm.example.com/v1
+VLLM_API_KEY=your_api_key
+
+# Model name (must support vision input)
+VLLM_MODEL=Qwen2-VL-7B-Instruct
+
+# Dataset storage
+STORAGE_DIR=storage
+HF_DATASET_DIRNAME=hf_dataset
+```
+
+See `np_ocr/api.py:55-66` for the complete configuration.
+
+### Supported Models
+
+While NoOCR defaults to `Qwen2-VL-7B-Instruct`, any vision-language model compatible with the OpenAI API format can be used:
+
+- **Qwen2-VL-7B-Instruct** (default): Good balance of speed and accuracy
+- **Qwen2-VL-72B-Instruct**: Higher accuracy, slower inference
+- **LLaVA**: Alternative open-source vision-language model
+- **GPT-4 Vision**: Can be used via OpenAI API (change `base_url`)
+
+## Error Handling
+
+The Q&A endpoint returns HTTP errors for common issues:
+
+| Status Code | Error | Cause |
+|-------------|-------|-------|
+| 400 | Invalid user_id provided | `user_id` contains invalid characters |
+| 400 | Invalid case_name provided | `case_name` contains invalid characters |
+| 400 | Invalid pdf_name provided | `pdf_name` contains invalid characters |
+| 400 | pdf_page must be positive | Page number is 0 or negative |
+| 404 | Dataset for this case not found | Case doesn't exist or dataset was deleted |
+| 404 | Image not found in dataset | Specified PDF/page combination doesn't exist |
+| 500 | Failed to load case dataset | Disk I/O error or dataset corruption |
+
+## Advanced Usage
+
+### Batch Q&A
+
+To ask the same question across multiple pages:
+
+```python
+import requests
+from concurrent.futures import ThreadPoolExecutor
+
+def ask_question(page_info, question):
+    response = requests.post(f"{base_url}/vllm_call", data={
+        'user_query': question,
+        'user_id': page_info['user_id'],
+        'case_name': page_info['case_name'],
+        'pdf_name': page_info['pdf_name'],
+        'pdf_page': page_info['pdf_page']
+    })
+    return response.json()
+
+# Search for relevant pages
+search_results = search(user_query="financial summary")['search_results']
+
+# Ask the same question about all results
+question = "What is the total revenue?"
+
+with ThreadPoolExecutor(max_workers=5) as executor:
+    answers = list(executor.map(
+        lambda result: ask_question(result, question),
+        search_results
+    ))
+
+for result, answer in zip(search_results, answers):
+    if answer['answer'] != 'NA':
+        print(f"{result['pdf_name']}, page {result['pdf_page']}: {answer['answer']}")
+```
+
+### Multi-Step Reasoning
+
+Chain multiple questions for complex analysis:
+
+```python
+# First, identify the document type
+type_response = vllm_call(
+    user_query="What type of document is this? (invoice, contract, receipt, etc.)",
+    pdf_name="document.pdf",
+    pdf_page=1
+)
+
+doc_type = type_response['answer']
+
+# Then ask type-specific questions
+if 'invoice' in doc_type.lower():
+    amount = vllm_call(
+        user_query="What is the total amount?",
+        pdf_name="document.pdf",
+        pdf_page=1
+    )
+    due_date = vllm_call(
+        user_query="What is the due date?",
+        pdf_name="document.pdf",
+        pdf_page=1
+    )
+```
+
+## Limitations
+
+<Warning>
+  **Known Limitations:**
+  
+  - **Single-page analysis**: The API analyzes one page at a time. For multi-page documents, you must query each page separately.
+  - **Image quality**: Very low-resolution or heavily compressed PDFs may reduce accuracy.
+  - **Handwriting**: While Qwen2-VL handles printed text well, handwritten text recognition is less reliable.
+  - **Mathematical formulas**: Complex equations may not be interpreted correctly.
+</Warning>
+
+## Best Practices
+
+1. **Be specific**: "What is the invoice total?" works better than "Tell me about this page"
+2. **One question at a time**: Break complex queries into multiple simple questions
+3. **Verify with source**: For critical information, verify answers by viewing the original page image
+4. **Handle "NA" responses**: Check for "NA" answers and adjust your query or try a different page
+5. **Use search first**: Find relevant pages with visual search before asking detailed questions
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Visual Search" icon="magnifying-glass" href="/features/visual-search">
+    Learn how to find relevant pages before asking questions
+  </Card>
+  
+  <Card title="API Reference" icon="code" href="/api/llm-endpoints">
+    Complete API documentation for the Q&A endpoint
+  </Card>
+</CardGroup>

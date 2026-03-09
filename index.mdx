@@ -1,97 +1,139 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "NoOCR Documentation"
+description: "AI-powered document exploration without traditional OCR"
 ---
 
-## Setting up
+<div style={{
+  background: 'linear-gradient(135deg, #F7F9FC 0%, #ffffff 100%)',
+  borderRadius: '6px',
+  padding: '48px 32px',
+  marginBottom: '32px'
+}}>
+  <h1 style={{
+    fontSize: '36px',
+    fontWeight: '700',
+    color: '#0B1524',
+    marginBottom: '16px',
+    fontFamily: 'Inter'
+  }}>
+    Explore Documents with AI
+  </h1>
+  <p style={{
+    fontSize: '18px',
+    color: '#0B1524',
+    marginBottom: '32px',
+    fontFamily: 'Inter',
+    opacity: 0.8
+  }}>
+    Process and search PDFs using visual embeddings and AI question-answering — no traditional OCR required.
+  </p>
+  <div style={{ display: 'flex', gap: '12px' }}>
+    <a
+      href="/quickstart"
+      style={{
+        background: '#2563eb',
+        color: '#ffffff',
+        padding: '12px 24px',
+        borderRadius: '4px',
+        textDecoration: 'none',
+        fontWeight: '600',
+        fontSize: '14.72px',
+        fontFamily: 'Inter'
+      }}
+    >
+      Get Started
+    </a>
+    <a
+      href="https://github.com/kyryl-opens-ml/no-ocr"
+      style={{
+        background: 'transparent',
+        color: '#6b7280',
+        padding: '12px 24px',
+        borderRadius: '4px',
+        textDecoration: 'none',
+        fontWeight: '600',
+        fontSize: '14.72px',
+        fontFamily: 'Inter',
+        border: '1px solid #e5e7eb'
+      }}
+    >
+      View on GitHub
+    </a>
+  </div>
+</div>
 
-Get your documentation site up and running in minutes.
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Case Management" icon="folder" href="/features/case-management">
+    Create and organize PDF collections with automated ingestion to Hugging Face datasets
+  </Card>
+  <Card title="Visual Search" icon="magnifying-glass" href="/features/visual-search">
+    Vector-based search using ColPali embeddings stored in LanceDB
+  </Card>
+  <Card title="AI Q&A" icon="messages-question" href="/features/ai-qa">
+    Question-answering on document images powered by Qwen2-VL
+  </Card>
+  <Card title="No OCR Required" icon="ban" href="/architecture/overview">
+    Process documents visually without traditional text extraction
+  </Card>
+</CardGroup>
+
+## Quick Start
+
+<Steps>
+  <Step title="Set up prerequisites">
+    Configure Supabase for authentication and Modal for LLM serving
+  </Step>
+  <Step title="Deploy the application">
+    Use Docker Compose or run the backend and frontend separately
+  </Step>
+  <Step title="Create your first case">
+    Upload PDFs to create a searchable collection
+  </Step>
+  <Step title="Search and explore">
+    Use visual search and AI Q&A to explore your documents
+  </Step>
+</Steps>
 
 <Card
-  title="Start here"
+  title="Read the Quickstart Guide"
   icon="rocket"
   href="/quickstart"
   horizontal
 >
-  Follow our three step quickstart guide.
+  Get NoOCR running in minutes with our comprehensive setup guide
 </Card>
 
-## Make it yours
+## Architecture Overview
 
-Design a docs site that looks great and empowers your users.
+NoOCR combines multiple AI technologies to enable powerful document exploration:
 
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={3}>
+  <Card title="FastAPI Backend" icon="server" href="/architecture/backend">
+    Python API handling PDF ingestion and search
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="React Frontend" icon="browser" href="/architecture/frontend">
+    User interface built with React and TypeScript
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Modal LLM Serving" icon="brain" href="/architecture/llm-serving">
+    Scalable inference with Qwen2-VL and ColPali
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
-  </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Explore the Documentation
 
-Everything you need to create world-class documentation.
-
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={2}>
+  <Card title="Core Features" icon="star" href="/features/case-management">
+    Learn about case management, visual search, and AI Q&A capabilities
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="Deployment Guide" icon="rocket" href="/deployment/overview">
+    Deploy NoOCR with Docker or set up a development environment
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="Architecture Details" icon="diagram-project" href="/architecture/overview">
+    Understand the system architecture and component interactions
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore REST API endpoints for cases, search, and LLM calls
   </Card>
-</Columns>
-
-## Need inspiration?
-
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+</CardGroup>

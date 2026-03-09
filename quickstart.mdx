@@ -1,80 +1,464 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Get NoOCR running in minutes and create your first document case"
 ---
 
-## Get started in three steps
+## Overview
 
-Get your documentation site running locally and make your first customization.
+This guide walks you through setting up NoOCR from scratch. You'll configure authentication, deploy AI models, run the application, and create your first searchable document case.
 
-### Step 1: Set up your local environment
+<Note>
+NoOCR requires external services for authentication (Supabase) and LLM inference (Modal). Make sure you have accounts ready before starting.
+</Note>
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+## Prerequisites
 
-### Step 2: Deploy your changes
+Before you begin, you'll need:
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
+- **Python 3.x** for the backend
+- **Node.js 18.x** for the frontend
+- **Docker** (optional, for containerized deployment)
+- **Git** to clone the repository
 
 <CardGroup cols={2}>
+  <Card title="Supabase Account" icon="database" href="https://app.supabase.io/">
+    Free tier available—used for user authentication
+  </Card>
+  <Card title="Modal Account" icon="server" href="https://modal.com/">
+    Serverless GPU inference for ColPali and Qwen2-VL
+  </Card>
+</CardGroup>
 
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
+## Step 1: Clone the Repository
 
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
+Start by cloning the NoOCR repository:
 
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
+```bash
+git clone https://github.com/kyryl-opens-ml/no-ocr
+cd no-ocr
+```
 
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
+The repository structure includes:
+- `no-ocr-api/` — FastAPI backend
+- `no-ocr-ui/` — React frontend
+- `no-ocr-llms/` — Modal deployment scripts for LLMs
 
+## Step 2: Set Up Supabase Authentication
+
+NoOCR uses Supabase for user authentication and management.
+
+<Steps>
+  <Step title="Create a Supabase project">
+    1. Go to [app.supabase.io](https://app.supabase.io/)
+    2. Click **New Project**
+    3. Choose a name and strong password
+    4. Wait for the project to finish provisioning
+  </Step>
+  
+  <Step title="Get your API credentials">
+    1. Navigate to **Settings** → **API**
+    2. Copy your **Project URL** (looks like `https://xxxxx.supabase.co`)
+    3. Copy your **anon public** key
+  </Step>
+  
+  <Step title="Configure the frontend">
+    Create a `.env` file in the `no-ocr-ui` directory:
+    
+    ```bash
+    cd no-ocr-ui
+    cp .env.example .env
+    ```
+    
+    Edit `.env` with your Supabase credentials:
+    
+    ```bash .env
+    VITE_SUPABASE_URL="https://xxxxx.supabase.co"
+    VITE_SUPABASE_ANON_KEY="your-anon-key-here"
+    VITE_REACT_APP_API_URI="http://localhost:8000"
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+Never commit your `.env` file to version control. It contains sensitive credentials.
+</Warning>
+
+## Step 3: Deploy LLMs on Modal
+
+NoOCR uses two AI models hosted on Modal for serverless GPU inference:
+
+1. **ColPali** (`vidore/colqwen2-v1.0-merged`) — Visual embeddings for search
+2. **Qwen2-VL** (`Qwen/Qwen2-VL-7B-Instruct`) — Vision-language model for Q&A
+
+<Steps>
+  <Step title="Install and authenticate Modal">
+    ```bash
+    pip install modal
+    modal setup
+    ```
+    
+    Follow the prompts to authenticate with your Modal account.
+  </Step>
+  
+  <Step title="Load the models">
+    Download and cache the models in Modal:
+    
+    ```bash
+    modal run no-ocr-llms/llm_serving_load_models.py \
+      --model-name Qwen/Qwen2-VL-7B-Instruct \
+      --model-revision 51c47430f97dd7c74aa1fa6825e68a813478097f
+    
+    modal run no-ocr-llms/llm_serving_load_models.py \
+      --model-name vidore/colqwen2-v1.0-merged \
+      --model-revision 364a4f5df97231e233e15cbbaf0b9dbe352ba92c
+    ```
+    
+    <Note>
+    This step may take several minutes as the models are large (7B+ parameters).
+    </Note>
+  </Step>
+  
+  <Step title="Deploy the inference services">
+    ```bash
+    modal deploy no-ocr-llms/llm_serving.py
+    modal deploy no-ocr-llms/llm_serving_colpali.py
+    ```
+    
+    After deployment, Modal will provide URLs for each service. Save these URLs—you'll need them for the backend configuration.
+  </Step>
+</Steps>
+
+## Step 4: Configure the Backend
+
+<Steps>
+  <Step title="Create the environment file">
+    ```bash
+    cd no-ocr-api
+    cp .env.example .env
+    ```
+  </Step>
+  
+  <Step title="Edit the configuration">
+    Open `.env` and configure the following variables:
+    
+    ```bash .env
+    STORAGE_DIR="storage"
+    CASE_INFO_FILENAME="case_info.json"
+    HF_DATASET_DIRNAME="hf_dataset"
+    SEARCH_TOP_K=3
+    VECTOR_SIZE=128
+    
+    # Modal ColPali service
+    COLPALI_BASE_URL="https://your-modal-username--llm-serving-colpali-web.modal.run"
+    COLPALI_TOKEN="your-modal-token"
+    
+    # Modal Qwen2-VL service
+    VLLM_URL="https://your-modal-username--llm-serving-web.modal.run/v1"
+    VLLM_API_KEY="your-modal-api-key"
+    VLLM_MODEL="Qwen2-VL-7B-Instruct"
+    ```
+  </Step>
+  
+  <Step title="Get Modal credentials">
+    Find your Modal token by running:
+    
+    ```bash
+    modal token show
+    ```
+    
+    Use this token for both `COLPALI_TOKEN` and `VLLM_API_KEY`.
+  </Step>
+</Steps>
+
+<Warning>
+The URLs from Modal deployments are unique to your account. Make sure to use the exact URLs provided by `modal deploy`.
+</Warning>
+
+## Step 5: Choose Your Deployment Method
+
+You can run NoOCR using Docker Compose (recommended for production) or in development mode.
+
+<CodeGroup>
+
+```bash Docker Compose
+# Make sure both .env files are configured first
+docker-compose up
+```
+
+```bash Development Mode
+# Terminal 1: Run the API
+cd no-ocr-api
+pip install -r requirements.txt
+fastapi dev api.py
+
+# Terminal 2: Run the UI
+cd no-ocr-ui
+npm install
+npm run dev
+```
+
+</CodeGroup>
+
+### Docker Compose
+
+The `docker-compose.yml` file orchestrates three services:
+
+```yaml docker-compose.yml
+services:
+  ui:
+    build: ./no-ocr-ui
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+  
+  api:
+    build: ./no-ocr-api
+    ports:
+      - "8000:8000"
+    depends_on:
+      - qdrant
+    volumes:
+      - api-storage:/app/storage
+  
+  qdrant:
+    image: qdrant/qdrant:v1.12.5
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant-storage:/qdrant/storage
+```
+
+<Note>
+The Docker setup includes Qdrant, but NoOCR currently uses LanceDB. Qdrant support may be added in future versions.
+</Note>
+
+### Development Mode
+
+Running in dev mode gives you:
+- **Hot reload** for both frontend and backend
+- **Better debugging** with source maps
+- **Faster iteration** during development
+
+Once both services are running:
+- Frontend: [http://localhost:5173](http://localhost:5173)
+- Backend API: [http://localhost:8000](http://localhost:8000)
+- API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+
+## Step 6: Create Your First Case
+
+Now that NoOCR is running, let's create a document case and perform a search.
+
+<Steps>
+  <Step title="Sign up and log in">
+    1. Open [http://localhost:5173](http://localhost:5173) in your browser
+    2. Create an account using your email
+    3. Confirm your email if required by Supabase
+    4. Log in to the application
+  </Step>
+  
+  <Step title="Create a new case">
+    1. Click **Create Case** or navigate to the case creation page
+    2. Enter a case name (alphanumeric and hyphens only, e.g., `my-documents`)
+    3. Upload one or more PDF files
+    4. Click **Submit**
+    
+    <Note>
+    The backend will process your PDFs in the background. This includes converting pages to images, generating embeddings, and indexing them in LanceDB.
+    </Note>
+  </Step>
+  
+  <Step title="Monitor processing status">
+    The case card will show:
+    - **Processing** — PDF conversion and embedding generation in progress
+    - **Done** — Case is ready for search
+    
+    Processing time depends on:
+    - Number of PDFs and pages
+    - Modal cold start time (first request may be slower)
+    - Network latency
+  </Step>
+  
+  <Step title="Search your documents">
+    Once the case status is **Done**:
+    
+    1. Select your case from the list
+    2. Enter a search query (e.g., "architecture diagram" or "revenue data")
+    3. View the top matching pages
+    4. Click on a result to see the full image
+  </Step>
+  
+  <Step title="Ask questions about pages">
+    For any search result:
+    
+    1. Click on the page image
+    2. Enter a question in the Q&A box (e.g., "What is the total revenue shown in this chart?")
+    3. Submit to get an AI-generated answer
+    
+    <Tip>
+    The AI can answer questions about text, diagrams, charts, tables, and other visual elements on the page.
+    </Tip>
+  </Step>
+</Steps>
+
+## API Usage Example
+
+You can also interact with NoOCR programmatically via its REST API.
+
+### Create a Case
+
+```python
+import requests
+
+# Create a new case with PDFs
+files = [
+    ('files', open('document1.pdf', 'rb')),
+    ('files', open('document2.pdf', 'rb')),
+]
+
+response = requests.post(
+    'http://localhost:8000/create_case',
+    data={
+        'user_id': 'user123',
+        'case_name': 'my-research-papers'
+    },
+    files=files
+)
+
+case_info = response.json()
+print(f"Case created: {case_info['name']}, Status: {case_info['status']}")
+```
+
+### Search Documents
+
+```python
+# Search for relevant pages
+response = requests.post(
+    'http://localhost:8000/search',
+    data={
+        'user_id': 'user123',
+        'case_name': 'my-research-papers',
+        'user_query': 'neural network architecture'
+    }
+)
+
+results = response.json()
+for result in results['search_results']:
+    print(f"Found: {result['pdf_name']} page {result['pdf_page']} (score: {result['score']:.4f})")
+```
+
+### Ask Questions
+
+```python
+# Ask a question about a specific page
+response = requests.post(
+    'http://localhost:8000/vllm_call',
+    data={
+        'user_id': 'user123',
+        'case_name': 'my-research-papers',
+        'pdf_name': 'paper.pdf',
+        'pdf_page': 5,
+        'user_query': 'What accuracy does this model achieve?'
+    }
+)
+
+answer = response.json()
+print(f"Answer: {answer['answer']}")
+```
+
+## Verify Your Installation
+
+Check that everything is working correctly:
+
+<Steps>
+  <Step title="Health check">
+    ```bash
+    curl http://localhost:8000/health
+    # Expected: {"status": "ok"}
+    ```
+  </Step>
+  
+  <Step title="List cases">
+    ```bash
+    curl "http://localhost:8000/get_cases?user_id=your-user-id"
+    ```
+  </Step>
+  
+  <Step title="Run backend tests">
+    ```bash
+    cd no-ocr-api
+    pytest
+    ```
+    
+    <Note>
+    Tests require valid Modal credentials in your `.env` file.
+    </Note>
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Modal deployment fails">
+    **Symptoms**: `modal deploy` returns authentication errors
+    
+    **Solution**: Run `modal token show` to verify your authentication, or `modal setup` to re-authenticate.
+  </Accordion>
+  
+  <Accordion title="Backend can't connect to Modal services">
+    **Symptoms**: Search or Q&A requests fail with connection errors
+    
+    **Solution**: 
+    1. Verify your `COLPALI_BASE_URL` and `VLLM_URL` match the deployed URLs
+    2. Check that your Modal token is valid with `modal token show`
+    3. Test the Modal endpoints directly using `curl`
+  </Accordion>
+  
+  <Accordion title="Frontend can't reach backend">
+    **Symptoms**: API requests fail with CORS or network errors
+    
+    **Solution**: 
+    1. Ensure `VITE_REACT_APP_API_URI` in `no-ocr-ui/.env` points to the correct backend URL
+    2. Check that the backend is running and accessible at `http://localhost:8000`
+    3. Verify CORS is enabled in the FastAPI app (it should be by default)
+  </Accordion>
+  
+  <Accordion title="Case processing is stuck on 'Processing'">
+    **Symptoms**: Case status never changes to "Done"
+    
+    **Solution**: 
+    1. Check backend logs for errors during PDF conversion or embedding generation
+    2. Ensure your PDFs are valid and not corrupted
+    3. Verify Modal services are responding (cold starts can take 30-60 seconds)
+  </Accordion>
+  
+  <Accordion title="Supabase authentication errors">
+    **Symptoms**: Can't log in or create an account
+    
+    **Solution**: 
+    1. Verify `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are correct
+    2. Check that email authentication is enabled in your Supabase project settings
+    3. Look for errors in the browser console
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Explore Core Features" icon="star" href="/features/case-management">
+    Learn about advanced case management, search options, and AI Q&A
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore all available endpoints and request formats
+  </Card>
+  <Card title="Architecture Deep Dive" icon="diagram-project" href="/architecture/overview">
+    Understand how NoOCR works under the hood
+  </Card>
+  <Card title="Deployment Guide" icon="rocket" href="/deployment/overview">
+    Deploy NoOCR to production environments
+  </Card>
 </CardGroup>
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+**Need help?** Check out the [release blog](https://kyrylai.com/2025/01/10/no-ocr-product/) or explore the [GitHub repository](https://github.com/kyryl-opens-ml/no-ocr) for more details.
 </Note>

@@ -1,0 +1,441 @@
+---
+title: LLM Endpoints
+description: API endpoints for AI-powered question-answering on document pages
+---
+
+## Overview
+
+The LLM endpoint enables AI-powered question-answering on specific document pages. Given a page reference and a question, it retrieves the page image and uses a vision-language model to provide an answer.
+
+## AI Question-Answering
+
+<Badge variant="success">POST</Badge> `/vllm_call`
+
+Ask a question about a specific page in a PDF document. The endpoint retrieves the page image from the dataset and sends it to a vision-language model (VLLM) for analysis.
+
+### Request Parameters
+
+<ParamField path="user_query" type="string" required>
+  The question to ask about the document page. Can be specific ("What is the total revenue?") or open-ended ("Summarize this page").
+</ParamField>
+
+<ParamField path="user_id" type="string" required>
+  The unique identifier for the user. Must match the pattern `^[\w\-]+$`.
+</ParamField>
+
+<ParamField path="case_name" type="string" required>
+  The name of the case containing the document.
+</ParamField>
+
+<ParamField path="pdf_name" type="string" required>
+  The name of the PDF file (must match an uploaded filename exactly). Must match the pattern `^[\w\-]+$`.
+</ParamField>
+
+<ParamField path="pdf_page" type="integer" required>
+  The page number within the PDF (1-indexed). Must be a positive integer.
+</ParamField>
+
+### Response
+
+Returns an `ImageAnswer` object:
+
+<ResponseField name="answer" type="string">
+  The AI-generated answer to the question based on the document page content.
+</ResponseField>
+
+### Example Request
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:8000/vllm_call \
+  -F "user_query=What is the total revenue for Q3?" \
+  -F "user_id=user123" \
+  -F "case_name=financial-reports" \
+  -F "pdf_name=Q3_Report.pdf" \
+  -F "pdf_page=5"
+```
+
+```javascript JavaScript
+const formData = new FormData();
+formData.append('user_query', 'What is the total revenue for Q3?');
+formData.append('user_id', 'user123');
+formData.append('case_name', 'financial-reports');
+formData.append('pdf_name', 'Q3_Report.pdf');
+formData.append('pdf_page', '5');
+
+fetch('http://localhost:8000/vllm_call', {
+  method: 'POST',
+  body: formData
+})
+  .then(response => response.json())
+  .then(data => console.log(data));
+```
+
+```python Python
+import requests
+
+data = {
+    'user_query': 'What is the total revenue for Q3?',
+    'user_id': 'user123',
+    'case_name': 'financial-reports',
+    'pdf_name': 'Q3_Report.pdf',
+    'pdf_page': 5
+}
+
+response = requests.post(
+    'http://localhost:8000/vllm_call',
+    data=data
+)
+print(response.json())
+```
+</CodeGroup>
+
+### Example Response
+
+```json
+{
+  "answer": "According to the financial report on this page, the total revenue for Q3 2024 was $45.2 million, representing a 12% increase compared to Q3 2023. The breakdown shows $32.1M from product sales, $8.7M from services, and $4.4M from licensing agreements."
+}
+```
+
+---
+
+## How It Works
+
+### Processing Flow
+
+1. **Validation**: The endpoint validates all input parameters and checks for malicious input
+2. **Dataset Loading**: Loads the HuggingFace dataset for the specified case
+3. **Image Retrieval**: Finds the exact page image matching the PDF name and page number
+4. **VLLM Call**: Sends the image and question to the vision-language model
+5. **Response**: Returns the AI-generated answer
+
+### Vision-Language Model
+
+The endpoint uses **Qwen2-VL-7B-Instruct** (configurable via `VLLM_MODEL`):
+- 7 billion parameter vision-language model
+- Instruction-tuned for question-answering tasks
+- Understands text, tables, charts, and diagrams in images
+- Provides contextual answers based on visual content
+
+### Dataset Structure
+
+The HuggingFace dataset contains:
+- **image**: PIL Image object of the document page
+- **pdf_name**: Original PDF filename
+- **pdf_page**: Page number (1-indexed)
+- **embeddings**: ColPali embeddings for search (not used in this endpoint)
+
+---
+
+## Use Cases
+
+### Extracting Specific Information
+
+**Query:**
+```
+"What is the contract expiration date?"
+```
+
+**Answer:**
+```
+"The contract expiration date is December 31, 2025, as stated in Section 3.2."
+```
+
+### Summarization
+
+**Query:**
+```
+"Summarize the key points on this page"
+```
+
+**Answer:**
+```
+"This page outlines three main initiatives: 1) Digital transformation..."
+```
+
+### Data Extraction
+
+**Query:**
+```
+"Extract all email addresses and phone numbers from this page"
+```
+
+**Answer:**
+```
+"Email addresses: contact@example.com, support@acme.com. Phone numbers: +1-555-0123, +1-555-0456."
+```
+
+### Visual Analysis
+
+**Query:**
+```
+"What does the bar chart show?"
+```
+
+**Answer:**
+```
+"The bar chart displays quarterly sales trends from Q1 to Q4, showing a steady increase..."
+```
+
+### Comparison
+
+**Query:**
+```
+"Compare the values in the first and second columns"
+```
+
+**Answer:**
+```
+"The first column shows projected values while the second shows actual values..."
+```
+
+---
+
+## Typical Workflow
+
+### Combined Search and Answer
+
+1. **Search**: Use `POST /search` to find relevant pages
+2. **Review**: Examine the returned images and scores
+3. **Question**: Use `POST /vllm_call` to ask detailed questions about specific pages
+
+<CodeGroup>
+```python Python Workflow
+import requests
+
+BASE_URL = "http://localhost:8000"
+
+# Step 1: Search for relevant pages
+search_data = {
+    'user_query': 'revenue figures',
+    'user_id': 'user123',
+    'case_name': 'financial-reports'
+}
+
+search_response = requests.post(
+    f"{BASE_URL}/search",
+    data=search_data
+).json()
+
+# Step 2: Get the best match
+best_result = search_response['search_results'][0]
+pdf_name = best_result['pdf_name']
+pdf_page = best_result['pdf_page']
+
+print(f"Best match: {pdf_name}, page {pdf_page}")
+
+# Step 3: Ask detailed question
+vllm_data = {
+    'user_query': 'What is the exact revenue figure and how does it compare to last year?',
+    'user_id': 'user123',
+    'case_name': 'financial-reports',
+    'pdf_name': pdf_name,
+    'pdf_page': pdf_page
+}
+
+vllm_response = requests.post(
+    f"{BASE_URL}/vllm_call",
+    data=vllm_data
+).json()
+
+print(f"Answer: {vllm_response['answer']}")
+```
+
+```javascript JavaScript Workflow
+const BASE_URL = 'http://localhost:8000';
+
+// Step 1: Search for relevant pages
+const searchFormData = new FormData();
+searchFormData.append('user_query', 'revenue figures');
+searchFormData.append('user_id', 'user123');
+searchFormData.append('case_name', 'financial-reports');
+
+const searchResponse = await fetch(`${BASE_URL}/search`, {
+  method: 'POST',
+  body: searchFormData
+}).then(r => r.json());
+
+// Step 2: Get the best match
+const bestResult = searchResponse.search_results[0];
+const pdfName = bestResult.pdf_name;
+const pdfPage = bestResult.pdf_page;
+
+console.log(`Best match: ${pdfName}, page ${pdfPage}`);
+
+// Step 3: Ask detailed question
+const vllmFormData = new FormData();
+vllmFormData.append('user_query', 'What is the exact revenue figure?');
+vllmFormData.append('user_id', 'user123');
+vllmFormData.append('case_name', 'financial-reports');
+vllmFormData.append('pdf_name', pdfName);
+vllmFormData.append('pdf_page', pdfPage);
+
+const vllmResponse = await fetch(`${BASE_URL}/vllm_call`, {
+  method: 'POST',
+  body: vllmFormData
+}).then(r => r.json());
+
+console.log(`Answer: ${vllmResponse.answer}`);
+```
+</CodeGroup>
+
+---
+
+## ImageAnswer Model
+
+The `ImageAnswer` model represents the AI-generated response:
+
+```python
+class ImageAnswer(BaseModel):
+    answer: str
+```
+
+### Field Descriptions
+
+- **answer**: The AI-generated text response based on analyzing the document page image
+
+---
+
+## Error Responses
+
+### 400 Bad Request
+
+**Invalid identifier:**
+```json
+{
+  "detail": "Invalid user_id provided."
+}
+```
+
+**Invalid page number:**
+```json
+{
+  "detail": "pdf_page must be positive."
+}
+```
+
+### 404 Not Found
+
+**Dataset not found:**
+```json
+{
+  "detail": "Dataset for this case not found."
+}
+```
+
+**Image not found:**
+```json
+{
+  "detail": "Image not found in the dataset for the given PDF name and page number."
+}
+```
+
+### 500 Internal Server Error
+
+**Failed to load dataset:**
+```json
+{
+  "detail": "Failed to load case dataset."
+}
+```
+
+---
+
+## Configuration
+
+The VLLM endpoint behavior is controlled by environment variables:
+
+| Variable | Description | Default |
+|----------|-------------|----------|
+| `VLLM_URL` | URL of the VLLM service endpoint | Required |
+| `VLLM_API_KEY` | API key for authenticating with VLLM | Required |
+| `VLLM_MODEL` | Model identifier to use | `"Qwen2-VL-7B-Instruct"` |
+
+<Note>
+  The VLLM service must be deployed separately and accessible from the NoOCR API. See the `no-ocr-llms` directory for Modal-based deployment scripts.
+</Note>
+
+---
+
+## Performance Considerations
+
+### Latency
+
+VLLM calls are the slowest operation in the API:
+- Dataset loading: 0.1-0.5 seconds
+- Image retrieval: < 0.1 seconds
+- VLLM inference: 2-10 seconds (depends on model size and query complexity)
+- **Total**: Typically 2-10 seconds
+
+### Optimization Tips
+
+1. **Cache Results**: Store answers for common questions
+2. **Batch Queries**: If asking multiple questions about the same page, consider batching
+3. **Pre-warm Model**: Keep the VLLM service warm to avoid cold start delays
+4. **Use Specific Queries**: More specific questions often get faster, more accurate answers
+
+### Timeouts
+
+Consider implementing timeouts in your client:
+- Recommended timeout: 30 seconds
+- Maximum expected latency: 15 seconds for complex queries
+
+<Tip>
+  For better results, include context in your questions. Instead of "What's the total?", ask "What's the total revenue shown in the financial table?"
+</Tip>
+
+---
+
+## Best Practices
+
+### Question Formulation
+
+**Good Questions:**
+- "What is the total budget allocated for marketing in the table?"
+- "Summarize the risk assessment section"
+- "List all action items mentioned on this page"
+
+**Poor Questions:**
+- "Tell me everything" (too broad)
+- "Total?" (lacks context)
+- "What does this mean?" (ambiguous)
+
+### Error Handling
+
+Always check for valid page references before calling VLLM:
+
+```python
+# First, verify the page exists
+case_response = requests.get(
+    f"{BASE_URL}/get_case/{case_name}",
+    params={'user_id': user_id}
+).json()
+
+if pdf_name not in case_response['files']:
+    print(f"PDF {pdf_name} not found in case")
+    exit()
+
+# Then make the VLLM call
+vllm_response = requests.post(
+    f"{BASE_URL}/vllm_call",
+    data=vllm_data
+).json()
+```
+
+### Multi-Page Analysis
+
+For questions spanning multiple pages, call VLLM separately for each page and aggregate results:
+
+```python
+for page_num in range(1, 6):  # Pages 1-5
+    vllm_data = {
+        'user_query': 'Extract the quarterly revenue figure',
+        'user_id': 'user123',
+        'case_name': 'reports',
+        'pdf_name': 'annual-report.pdf',
+        'pdf_page': page_num
+    }
+    response = requests.post(f"{BASE_URL}/vllm_call", data=vllm_data).json()
+    print(f"Page {page_num}: {response['answer']}")
+```

@@ -1,0 +1,444 @@
+---
+title: Case Endpoints
+description: API endpoints for managing document cases in NoOCR
+---
+
+## Overview
+
+Case endpoints allow you to manage collections of PDF documents. Each case belongs to a specific user and contains one or more PDF files that are processed and indexed for search and AI operations.
+
+## Create Case
+
+<Badge variant="success">POST</Badge> `/create_case`
+
+Create a new case by uploading PDF files. The files are processed in the background to generate embeddings and enable search functionality.
+
+### Request Parameters
+
+<ParamField path="user_id" type="string" required>
+  The unique identifier for the user. Must match the pattern `^[\w\-]+$` (alphanumeric, underscores, and hyphens only).
+</ParamField>
+
+<ParamField path="case_name" type="string" required>
+  The name for the new case. Must be unique for the user and match the pattern `^[\w\-]+$`.
+</ParamField>
+
+<ParamField path="files" type="file[]" required>
+  Array of PDF files to upload. Each file must have a `.pdf` extension.
+</ParamField>
+
+### Response
+
+Returns a `CaseInfo` object:
+
+<ResponseField name="name" type="string">
+  The name of the created case.
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Processing status. Will be `"processing"` initially, then `"done"` when complete.
+</ResponseField>
+
+<ResponseField name="number_of_pdfs" type="integer">
+  The number of PDF files in the case.
+</ResponseField>
+
+<ResponseField name="files" type="string[]">
+  Array of uploaded file names.
+</ResponseField>
+
+<ResponseField name="case_dir" type="string">
+  The storage directory path for this case.
+</ResponseField>
+
+### Example Request
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:8000/create_case \
+  -F "user_id=user123" \
+  -F "case_name=financial-reports" \
+  -F "files=@document1.pdf" \
+  -F "files=@document2.pdf" \
+  -F "files=@document3.pdf"
+```
+
+```javascript JavaScript
+const formData = new FormData();
+formData.append('user_id', 'user123');
+formData.append('case_name', 'financial-reports');
+formData.append('files', file1);
+formData.append('files', file2);
+formData.append('files', file3);
+
+fetch('http://localhost:8000/create_case', {
+  method: 'POST',
+  body: formData
+})
+  .then(response => response.json())
+  .then(data => console.log(data));
+```
+
+```python Python
+import requests
+
+files = [
+    ('files', open('document1.pdf', 'rb')),
+    ('files', open('document2.pdf', 'rb')),
+    ('files', open('document3.pdf', 'rb'))
+]
+
+data = {
+    'user_id': 'user123',
+    'case_name': 'financial-reports'
+}
+
+response = requests.post(
+    'http://localhost:8000/create_case',
+    files=files,
+    data=data
+)
+print(response.json())
+```
+</CodeGroup>
+
+### Example Response
+
+```json
+{
+  "name": "financial-reports",
+  "status": "processing",
+  "number_of_pdfs": 3,
+  "files": [
+    "document1.pdf",
+    "document2.pdf",
+    "document3.pdf"
+  ],
+  "case_dir": "storage/user123/financial-reports"
+}
+```
+
+<Note>
+  The case is processed in the background. The status will be `"processing"` initially. Use the `GET /get_case/{case_name}` endpoint to check when processing is complete (status becomes `"done"`).
+</Note>
+
+---
+
+## List Cases
+
+<Badge variant="info">GET</Badge> `/get_cases`
+
+Retrieve a list of all cases for a specific user, including both user-specific cases and common cases available to all users.
+
+### Request Parameters
+
+<ParamField query="user_id" type="string" required>
+  The unique identifier for the user.
+</ParamField>
+
+### Response
+
+Returns an object with a `cases` array:
+
+<ResponseField name="cases" type="CaseInfo[]">
+  Array of case information objects. If no cases are found, returns `{"message": "No cases found.", "cases": []}`.
+</ResponseField>
+
+Each case object contains:
+- `name` (string) - Case name
+- `status` (string) - Processing status ("processing" or "done")
+- `number_of_pdfs` (integer) - Number of PDFs
+- `files` (string[]) - Array of file names
+- `case_dir` (string) - Storage directory path
+
+### Example Request
+
+<CodeGroup>
+```bash cURL
+curl "http://localhost:8000/get_cases?user_id=user123"
+```
+
+```javascript JavaScript
+fetch('http://localhost:8000/get_cases?user_id=user123')
+  .then(response => response.json())
+  .then(data => console.log(data));
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    'http://localhost:8000/get_cases',
+    params={'user_id': 'user123'}
+)
+print(response.json())
+```
+</CodeGroup>
+
+### Example Response
+
+```json
+{
+  "cases": [
+    {
+      "name": "financial-reports",
+      "status": "done",
+      "number_of_pdfs": 3,
+      "files": [
+        "document1.pdf",
+        "document2.pdf",
+        "document3.pdf"
+      ],
+      "case_dir": "storage/user123/financial-reports"
+    },
+    {
+      "name": "legal-documents",
+      "status": "processing",
+      "number_of_pdfs": 2,
+      "files": [
+        "contract.pdf",
+        "agreement.pdf"
+      ],
+      "case_dir": "storage/user123/legal-documents"
+    }
+  ]
+}
+```
+
+---
+
+## Get Case Details
+
+<Badge variant="info">GET</Badge> `/get_case/{case_name}`
+
+Retrieve detailed information about a specific case.
+
+### Path Parameters
+
+<ParamField path="case_name" type="string" required>
+  The name of the case to retrieve.
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="user_id" type="string" required>
+  The unique identifier for the user who owns the case.
+</ParamField>
+
+### Response
+
+Returns a `CaseInfo` object with the following fields:
+
+<ResponseField name="name" type="string">
+  The name of the case.
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Processing status: `"processing"` or `"done"`.
+</ResponseField>
+
+<ResponseField name="number_of_pdfs" type="integer">
+  The number of PDF files in the case.
+</ResponseField>
+
+<ResponseField name="files" type="string[]">
+  Array of PDF file names.
+</ResponseField>
+
+<ResponseField name="case_dir" type="string">
+  The storage directory path for this case.
+</ResponseField>
+
+### Example Request
+
+<CodeGroup>
+```bash cURL
+curl "http://localhost:8000/get_case/financial-reports?user_id=user123"
+```
+
+```javascript JavaScript
+fetch('http://localhost:8000/get_case/financial-reports?user_id=user123')
+  .then(response => response.json())
+  .then(data => console.log(data));
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    'http://localhost:8000/get_case/financial-reports',
+    params={'user_id': 'user123'}
+)
+print(response.json())
+```
+</CodeGroup>
+
+### Example Response
+
+```json
+{
+  "name": "financial-reports",
+  "status": "done",
+  "number_of_pdfs": 3,
+  "files": [
+    "document1.pdf",
+    "document2.pdf",
+    "document3.pdf"
+  ],
+  "case_dir": "storage/user123/financial-reports"
+}
+```
+
+<Note>
+  The endpoint first checks user-specific cases, then falls back to common cases if the case is not found in the user's directory.
+</Note>
+
+---
+
+## Delete Case
+
+<Badge variant="danger">DELETE</Badge> `/delete_case/{case_name}`
+
+Delete a specific case and all its associated files.
+
+### Path Parameters
+
+<ParamField path="case_name" type="string" required>
+  The name of the case to delete.
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="user_id" type="string" required>
+  The unique identifier for the user who owns the case.
+</ParamField>
+
+### Response
+
+Returns a success message:
+
+<ResponseField name="message" type="string">
+  Confirmation message indicating the case was deleted.
+</ResponseField>
+
+### Example Request
+
+<CodeGroup>
+```bash cURL
+curl -X DELETE "http://localhost:8000/delete_case/financial-reports?user_id=user123"
+```
+
+```javascript JavaScript
+fetch('http://localhost:8000/delete_case/financial-reports?user_id=user123', {
+  method: 'DELETE'
+})
+  .then(response => response.json())
+  .then(data => console.log(data));
+```
+
+```python Python
+import requests
+
+response = requests.delete(
+    'http://localhost:8000/delete_case/financial-reports',
+    params={'user_id': 'user123'}
+)
+print(response.json())
+```
+</CodeGroup>
+
+### Example Response
+
+```json
+{
+  "message": "Case 'financial-reports' has been deleted."
+}
+```
+
+<Warning>
+  This operation is irreversible. All PDF files, embeddings, and metadata associated with the case will be permanently deleted.
+</Warning>
+
+---
+
+## CaseInfo Model
+
+The `CaseInfo` model represents the structure of a case in the NoOCR system:
+
+```python
+class CaseInfo(BaseModel):
+    name: str
+    status: str  # "processing" or "done"
+    number_of_pdfs: int
+    files: List[str]
+    case_dir: Path
+```
+
+### Field Descriptions
+
+- **name**: Unique identifier for the case within the user's scope
+- **status**: Current processing state
+  - `"processing"`: Case is being processed (PDFs are being converted to embeddings)
+  - `"done"`: Case is ready for search and AI queries
+- **number_of_pdfs**: Total count of PDF files uploaded to this case
+- **files**: List of original PDF filenames
+- **case_dir**: File system path where case data is stored
+
+---
+
+## Error Responses
+
+### 400 Bad Request
+
+**Invalid identifier:**
+```json
+{
+  "detail": "Invalid user_id provided."
+}
+```
+
+**Missing required fields:**
+```json
+{
+  "detail": "No files, case name, or user ID provided."
+}
+```
+
+**Unsupported file type:**
+```json
+{
+  "detail": "Unsupported file type: document.txt"
+}
+```
+
+### 404 Not Found
+
+**Case not found:**
+```json
+{
+  "detail": "Case info not found."
+}
+```
+
+**Case not found in storage:**
+```json
+{
+  "detail": "Case not found in storage."
+}
+```
+
+### 500 Internal Server Error
+
+**Failed to read case info:**
+```json
+{
+  "detail": "Failed to read case info."
+}
+```
+
+**Failed to delete case:**
+```json
+{
+  "detail": "Failed to delete case."
+}
+```

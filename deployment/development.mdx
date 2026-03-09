@@ -1,0 +1,356 @@
+---
+title: Development Setup
+description: Run NoOCR locally for development with hot-reloading
+---
+
+## Overview
+
+Development mode allows you to run NoOCR services directly on your host machine with hot-reloading enabled. This setup is ideal for active development, debugging, and rapid iteration.
+
+## Repository Structure
+
+The NoOCR repository is organized into three main directories:
+
+```
+no-ocr/
+├── no-ocr-api/          # FastAPI backend
+│   ├── api.py           # Main API entry point
+│   ├── requirements.txt # Python dependencies
+│   ├── tests/           # Backend tests
+│   └── .env.example     # API environment template
+├── no-ocr-ui/           # React frontend
+│   ├── src/             # UI source code
+│   ├── package.json     # Node dependencies
+│   └── .env.example     # UI environment template
+└── no-ocr-llms/         # Modal LLM serving scripts
+    ├── llm_serving.py           # Qwen2-VL serving
+    ├── llm_serving_colpali.py   # ColPali serving
+    └── llm_serving_load_models.py # Model loader
+```
+
+## Prerequisites
+
+Before starting, ensure you have:
+
+1. Completed the [prerequisites setup](/deployment/prerequisites)
+2. Python 3.x installed
+3. Node.js 18.x installed
+4. Modal models deployed and running
+5. Supabase project configured
+
+## Installation Steps
+
+### Backend (API) Setup
+
+<Steps>
+  <Step title="Clone the Repository">
+    ```bash
+    git clone https://github.com/kyryl-opens-ml/no-ocr
+    cd no-ocr
+    ```
+  </Step>
+  
+  <Step title="Install API Dependencies">
+    Navigate to the API directory and install Python packages:
+    
+    ```bash
+    cd no-ocr-api
+    pip install -r requirements.txt
+    ```
+    
+    <Note>
+      Consider using a virtual environment to isolate dependencies:
+      ```bash
+      python -m venv venv
+      source venv/bin/activate  # On Windows: venv\Scripts\activate
+      pip install -r requirements.txt
+      ```
+    </Note>
+  </Step>
+  
+  <Step title="Configure API Environment">
+    Create a `.env` file based on the example:
+    
+    ```bash
+    cp .env.example .env
+    ```
+    
+    Edit `.env` with your configuration:
+    
+    ```bash
+    STORAGE_DIR="storage"
+    CASE_INFO_FILENAME="case_info.json"
+    HF_DATASET_DIRNAME="hf_dataset"
+    SEARCH_TOP_K=3
+    COLPALI_TOKEN="your-modal-token"
+    VLLM_URL="your-vllm-endpoint"
+    COLPALI_BASE_URL="your-colpali-endpoint"
+    VECTOR_SIZE=128
+    ```
+  </Step>
+  
+  <Step title="Start the API Server">
+    Run the FastAPI development server:
+    
+    ```bash
+    fastapi dev api.py
+    ```
+    
+    The API will start at [http://localhost:8000](http://localhost:8000) with hot-reloading enabled.
+    
+    <Info>
+      The `fastapi dev` command automatically enables:
+      - Hot-reloading on code changes
+      - Interactive API docs at `/docs`
+      - Debug mode with detailed error messages
+    </Info>
+  </Step>
+</Steps>
+
+### Frontend (UI) Setup
+
+<Steps>
+  <Step title="Navigate to UI Directory">
+    Open a new terminal and navigate to the UI directory:
+    
+    ```bash
+    cd no-ocr/no-ocr-ui
+    ```
+  </Step>
+  
+  <Step title="Install UI Dependencies">
+    Install Node.js packages using npm:
+    
+    <CodeGroup>
+    ```bash npm
+    npm install
+    ```
+    
+    ```bash yarn
+    yarn install
+    ```
+    
+    ```bash pnpm
+    pnpm install
+    ```
+    </CodeGroup>
+  </Step>
+  
+  <Step title="Configure UI Environment">
+    Create a `.env` file based on the example:
+    
+    ```bash
+    cp .env.example .env
+    ```
+    
+    Edit `.env` with your Supabase credentials:
+    
+    ```bash
+    VITE_SUPABASE_URL="your-supabase-project-url"
+    VITE_SUPABASE_ANON_KEY="your-supabase-anon-key"
+    VITE_REACT_APP_API_URI="http://localhost:8000"
+    ```
+  </Step>
+  
+  <Step title="Start the Development Server">
+    Run the Vite development server:
+    
+    <CodeGroup>
+    ```bash npm
+    npm run dev
+    ```
+    
+    ```bash yarn
+    yarn dev
+    ```
+    
+    ```bash pnpm
+    pnpm dev
+    ```
+    </CodeGroup>
+    
+    The UI will start at [http://localhost:5173](http://localhost:5173) with hot module replacement (HMR).
+  </Step>
+</Steps>
+
+## Accessing the Application
+
+Once both services are running:
+
+- **Frontend**: [http://localhost:5173](http://localhost:5173)
+- **API**: [http://localhost:8000](http://localhost:8000)
+- **API Documentation**: [http://localhost:8000/docs](http://localhost:8000/docs)
+- **API Redoc**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
+
+## Development Workflow
+
+### Making Code Changes
+
+<AccordionGroup>
+  <Accordion title="Backend Changes">
+    1. Edit Python files in `no-ocr-api/`
+    2. FastAPI automatically reloads on save
+    3. Check the terminal for any errors
+    4. Test changes at [http://localhost:8000/docs](http://localhost:8000/docs)
+  </Accordion>
+  
+  <Accordion title="Frontend Changes">
+    1. Edit React/TypeScript files in `no-ocr-ui/src/`
+    2. Vite hot-reloads changes instantly in the browser
+    3. Check browser console for any errors
+    4. Run linter: `npm run lint`
+  </Accordion>
+</AccordionGroup>
+
+### Code Quality
+
+<Tabs>
+  <Tab title="Python">
+    Run Ruff linter before committing:
+    
+    ```bash
+    cd no-ocr-api
+    ruff .
+    ```
+    
+    Configuration is defined in `pyproject.toml` with:
+    - Line length: 120 characters
+    - Rules: E, F, I, N, Q, W
+  </Tab>
+  
+  <Tab title="TypeScript">
+    Run ESLint before committing:
+    
+    ```bash
+    cd no-ocr-ui
+    npm run lint
+    ```
+    
+    ESLint checks React hooks, TypeScript types, and code style.
+  </Tab>
+</Tabs>
+
+## Running Tests
+
+<Steps>
+  <Step title="Install Backend Dependencies">
+    ```bash
+    pip install -r no-ocr-api/requirements.txt
+    ```
+  </Step>
+  
+  <Step title="Configure Test Environment">
+    Copy and configure the environment file:
+    
+    ```bash
+    cp no-ocr-api/.env.example no-ocr-api/.env
+    ```
+    
+    Update the following values in `.env`:
+    - `COLPALI_TOKEN`
+    - `COLPALI_BASE_URL`
+    - `VLLM_URL`
+    - `VLLM_API_KEY`
+  </Step>
+  
+  <Step title="(Optional) Start Mock ColPali Server">
+    For local testing without Modal, start the mock server:
+    
+    ```bash
+    uvicorn no-ocr-api/tests/mock_colpali:app --port 8000 &
+    ```
+  </Step>
+  
+  <Step title="Run Tests">
+    Execute pytest from the repository root:
+    
+    ```bash
+    pytest
+    ```
+    
+    Test files are located in `no-ocr-api/tests/` with sample PDFs in `no-ocr-api/data/`.
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="API Won't Start">
+    **Problem**: FastAPI fails to start or crashes immediately.
+    
+    **Solutions**:
+    - Verify Python version: `python --version` (3.x required)
+    - Check all dependencies are installed: `pip list`
+    - Ensure `.env` file exists in `no-ocr-api/`
+    - Check port 8000 is not in use: `lsof -i :8000`
+    - Review error messages in the terminal
+  </Accordion>
+  
+  <Accordion title="UI Won't Start">
+    **Problem**: Vite development server fails to start.
+    
+    **Solutions**:
+    - Verify Node.js version: `node --version` (18.x required)
+    - Delete `node_modules` and reinstall: `rm -rf node_modules && npm install`
+    - Ensure `.env` file exists in `no-ocr-ui/`
+    - Check port 5173 is not in use: `lsof -i :5173`
+    - Clear Vite cache: `rm -rf node_modules/.vite`
+  </Accordion>
+  
+  <Accordion title="API Can't Connect to Modal">
+    **Problem**: Backend fails to reach Modal LLM endpoints.
+    
+    **Solutions**:
+    - Verify Modal deployments are active: `modal app list`
+    - Check Modal tokens in `.env` are correct
+    - Test endpoints directly: `curl -H "Authorization: Bearer $COLPALI_TOKEN" $COLPALI_BASE_URL`
+    - Ensure you've deployed both LLM services
+    - Check Modal service logs: `modal app logs <app-name>`
+  </Accordion>
+  
+  <Accordion title="Authentication Issues">
+    **Problem**: Supabase authentication fails in the UI.
+    
+    **Solutions**:
+    - Verify Supabase URL and anon key in `no-ocr-ui/.env`
+    - Check Supabase project is active at [https://app.supabase.io/](https://app.supabase.io/)
+    - Ensure CORS is properly configured in Supabase
+    - Check browser console for detailed error messages
+  </Accordion>
+  
+  <Accordion title="Vector Database Errors">
+    **Problem**: Search functionality fails or embeddings can't be stored.
+    
+    **Solutions**:
+    - For dev mode with LanceDB, ensure storage directory exists
+    - Check `STORAGE_DIR` in `.env` is writable
+    - Verify `VECTOR_SIZE` matches the model output (default: 128)
+    - Clear and regenerate the dataset if corrupted
+  </Accordion>
+</AccordionGroup>
+
+## Development Tips
+
+<CardGroup cols={2}>
+  <Card title="Use the API Docs" icon="book">
+    Visit [http://localhost:8000/docs](http://localhost:8000/docs) to interactively test API endpoints without writing UI code.
+  </Card>
+  
+  <Card title="Monitor Logs" icon="terminal">
+    Keep terminal windows visible for both API and UI to catch errors immediately.
+  </Card>
+  
+  <Card title="Use Virtual Environments" icon="python">
+    Isolate Python dependencies with `venv` to avoid conflicts with system packages.
+  </Card>
+  
+  <Card title="Enable Browser DevTools" icon="browser">
+    Use React DevTools and browser console to debug UI state and network requests.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+- Learn about [Docker deployment](/deployment/docker) for production
+- Review [API documentation](/api/overview) for endpoint details
+- Explore the codebase structure in the repository

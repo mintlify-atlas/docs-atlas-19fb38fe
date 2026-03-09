@@ -1,0 +1,643 @@
+---
+title: "LLM Serving Infrastructure"
+description: "Modal-based deployment for ColPali embeddings and Qwen2-VL inference"
+icon: "brain"
+---
+
+## Overview
+
+The NoOCR LLM infrastructure runs on [Modal](https://modal.com), a serverless GPU platform. This architecture provides:
+
+- **Auto-scaling**: GPU containers spin up on demand
+- **Cost efficiency**: Pay only for actual GPU usage
+- **Easy deployment**: Simple Python decorators for serverless functions
+- **High performance**: A100 GPUs with vLLM optimization
+
+## Architecture Components
+
+<CardGroup cols={2}>
+  <Card title="ColPali Embedding Service" icon="fingerprint">
+    Multi-vector embeddings for document pages and text queries
+  </Card>
+  <Card title="Qwen2-VL Inference Service" icon="eye">
+    Vision-language model for visual question answering
+  </Card>
+  <Card title="Model Loading Script" icon="download">
+    Downloads models from Hugging Face to Modal volumes
+  </Card>
+  <Card title="Shared Model Volume" icon="hard-drive">
+    Persistent storage for model weights across containers
+  </Card>
+</CardGroup>
+
+## Models Used
+
+### ColPali: colqwen2-v1.0-merged
+
+**Hugging Face:** `vidore/colqwen2-v1.0-merged`
+
+- **Purpose**: Multi-vector embeddings for document retrieval
+- **Architecture**: Qwen2-based vision encoder
+- **Output**: 128-dimensional embeddings per patch
+- **Use case**: Embedding PDF pages and text queries for semantic search
+
+### Qwen2-VL: 7B Instruct
+
+**Hugging Face:** `Qwen/Qwen2-VL-7B-Instruct`
+
+- **Purpose**: Visual question answering on document pages
+- **Parameters**: 7 billion
+- **Context length**: 8,096 tokens (configured in deployment)
+- **Use case**: Extracting answers from retrieved document pages
+
+## Model Loading Script
+
+Before deploying the services, models must be downloaded to a Modal volume.
+
+**Source:** `no-ocr-llms/llm_serving_load_models.py`
+
+```python
+import modal
+
+MODELS_DIR = "/models"
+DEFAULT_NAME = "Qwen/Qwen2.5-7B-Instruct"
+DEFAULT_REVISION = "bb46c15ee4bb56c5b63245ef50fd7637234d6f75"
+
+# Create or reference the persistent volume
+volume = modal.Volume.from_name("models", create_if_missing=True)
+
+# Image with Hugging Face Hub client
+image = (
+    modal.Image.debian_slim(python_version="3.10")
+    .pip_install(["huggingface_hub", "hf-transfer"])
+    .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
+)
+
+app = modal.App(image=image, secrets=[modal.Secret.from_name("huggingface-secret")])
+
+@app.function(volumes={MODELS_DIR: volume}, timeout=4 * 60 * 60)
+def download_model(model_name, model_revision, force_download=False):
+    from huggingface_hub import snapshot_download
+    
+    volume.reload()  # Ensure we have latest state
+    
+    # Download model to volume
+    snapshot_download(
+        model_name,
+        local_dir=MODELS_DIR + "/" + model_name,
+        ignore_patterns=[
+            "*.pt",   # PyTorch checkpoints
+            "*.bin",  # Old format
+            "*.pth",
+            "original/*",
+        ],
+        revision=model_revision,
+        force_download=force_download,
+    )
+    
+    volume.commit()  # Persist changes
+
+@app.local_entrypoint()
+def main(
+    model_name: str = DEFAULT_NAME,
+    model_revision: str = DEFAULT_REVISION,
+    force_download: bool = False,
+):
+    download_model.remote(model_name, model_revision, force_download)
+```
+
+### Loading Models
+
+**Load Qwen2-VL:**
+
+```bash
+modal run no-ocr-llms/llm_serving_load_models.py \
+  --model-name Qwen/Qwen2-VL-7B-Instruct \
+  --model-revision 51c47430f97dd7c74aa1fa6825e68a813478097f
+```
+
+**Load ColPali:**
+
+```bash
+modal run no-ocr-llms/llm_serving_load_models.py \
+  --model-name vidore/colqwen2-v1.0-merged \
+  --model-revision 364a4f5df97231e233e15cbbaf0b9dbe352ba92c
+```
+
+**Key Features:**
+- Uses `hf-transfer` for faster downloads (10x+ speedup)
+- Filters out non-safetensors formats for safety
+- Stores in persistent Modal volume for reuse across deployments
+- Requires `huggingface-secret` Modal secret with HF token
+
+## ColPali Embedding Service
+
+Provides endpoints for generating embeddings from text queries and images.
+
+**Source:** `no-ocr-llms/llm_serving_colpali.py`
+
+```python
+import modal
+
+vllm_image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .pip_install("vllm==0.6.3post1", "fastapi[standard]==0.115.4")
+    .pip_install("colpali-engine")
+)
+
+MODELS_DIR = "/models"
+MODEL_NAME = "vidore/colqwen2-v1.0-merged"
+
+volume = modal.Volume.lookup("models", create_if_missing=False)
+
+app = modal.App("colpali-embedding")
+
+N_GPU = 1
+TOKEN = "super-secret-token"
+
+@app.function(
+    image=vllm_image,
+    gpu=modal.gpu.A100(count=N_GPU),
+    keep_warm=0,
+    container_idle_timeout=1 * 60,  # 1 minute
+    timeout=24 * 60 * 60,           # 24 hours
+    allow_concurrent_inputs=1000,
+    volumes={MODELS_DIR: volume},
+)
+@modal.asgi_app()
+def serve():
+    import fastapi
+    import torch
+    from colpali_engine.models import ColQwen2, ColQwen2Processor
+    from fastapi import APIRouter, Depends, HTTPException, Security
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.security import HTTPBearer
+    
+    volume.reload()  # Load latest model weights
+    
+    # Create FastAPI app
+    web_app = fastapi.FastAPI(
+        title=f"ColPali {MODEL_NAME} server",
+        description="Run a ColPali model server with fastAPI on modal.com",
+        version="0.0.1",
+        docs_url="/docs",
+    )
+    
+    # CORS middleware
+    http_bearer = HTTPBearer(
+        scheme_name="Bearer Token",
+        description="See code for authentication details.",
+    )
+    web_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    
+    # Authentication
+    async def is_authenticated(api_key: str = Security(http_bearer)):
+        if api_key.credentials != TOKEN:
+            raise HTTPException(
+                status_code=fastapi.status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials",
+            )
+        return {"username": "authenticated_user"}
+    
+    router = APIRouter(dependencies=[Depends(is_authenticated)])
+    
+    # Load model
+    model_name = "/models/vidore/colqwen2-v1.0-merged"
+    colpali_model = ColQwen2.from_pretrained(
+        model_name,
+        torch_dtype=torch.bfloat16,
+        device_map="cuda:0",
+    ).eval()
+    
+    colpali_processor = ColQwen2Processor.from_pretrained(model_name)
+    
+    # Endpoint: Query text embedding
+    @router.post("/query")
+    async def query_model(query_text: str):
+        with torch.no_grad():
+            batch_query = colpali_processor.process_queries([query_text]).to(colpali_model.device)
+            query_embedding = colpali_model(**batch_query)
+        return {"embedding": query_embedding[0].cpu().float().numpy().tolist()}
+    
+    # Endpoint: Image embedding
+    @router.post("/process_image")
+    async def process_image(image: fastapi.UploadFile):
+        from PIL import Image
+        
+        pil_image = Image.open(image.file)
+        with torch.no_grad():
+            batch_image = colpali_processor.process_images([pil_image]).to(colpali_model.device)
+            image_embedding = colpali_model(**batch_image)
+        return {"embedding": image_embedding[0].cpu().float().numpy().tolist()}
+    
+    web_app.include_router(router)
+    
+    return web_app
+```
+
+### Deployment
+
+```bash
+modal deploy no-ocr-llms/llm_serving_colpali.py
+```
+
+This creates a persistent deployment accessible via HTTPS.
+
+### Endpoints
+
+**POST /query**
+
+Generate embedding for text query.
+
+```python
+# Request
+POST https://yourapp--colpali-embedding-serve.modal.run/query?query_text=What+is+the+revenue?
+Headers:
+  Authorization: Bearer super-secret-token
+
+# Response
+{
+  "embedding": [[float, float, ...], [float, float, ...], ...]
+}
+```
+
+**POST /process_image**
+
+Generate embedding for uploaded image.
+
+```python
+# Request
+POST https://yourapp--colpali-embedding-serve.modal.run/process_image
+Headers:
+  Authorization: Bearer super-secret-token
+Body: multipart/form-data
+  image: <file>
+
+# Response
+{
+  "embedding": [[float, float, ...], [float, float, ...], ...]
+}
+```
+
+### Configuration
+
+- **GPU**: 1x NVIDIA A100 (40GB)
+- **Keep warm**: 0 (scale to zero when idle)
+- **Idle timeout**: 1 minute
+- **Max timeout**: 24 hours
+- **Concurrency**: 1000 requests
+- **Precision**: bfloat16 for efficiency
+
+## Qwen2-VL Inference Service
+
+Provides OpenAI-compatible API for vision-language inference using vLLM.
+
+**Source:** `no-ocr-llms/llm_serving.py`
+
+```python
+import modal
+
+vllm_image = modal.Image.debian_slim(python_version="3.12").pip_install(
+    "vllm==0.6.3post1", "fastapi[standard]==0.115.4"
+)
+
+MODELS_DIR = "/models"
+MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"
+
+volume = modal.Volume.lookup("models", create_if_missing=False)
+
+app = modal.App("qwen2-vllm")
+
+N_GPU = 1
+TOKEN = "super-secret-token"
+
+@app.function(
+    image=vllm_image,
+    gpu=modal.gpu.A100(count=N_GPU),
+    keep_warm=0,
+    container_idle_timeout=1 * 60,
+    timeout=24 * 60 * 60,
+    allow_concurrent_inputs=1000,
+    volumes={MODELS_DIR: volume},
+)
+@modal.asgi_app()
+def serve():
+    import fastapi
+    import vllm.entrypoints.openai.api_server as api_server
+    from vllm.engine.arg_utils import AsyncEngineArgs
+    from vllm.engine.async_llm_engine import AsyncLLMEngine
+    from vllm.entrypoints.logger import RequestLogger
+    from vllm.entrypoints.openai.serving_chat import OpenAIServingChat
+    from vllm.entrypoints.openai.serving_completion import OpenAIServingCompletion
+    from vllm.entrypoints.openai.serving_engine import BaseModelPath
+    from vllm.usage.usage_lib import UsageContext
+    
+    volume.reload()
+    
+    # Create FastAPI app with vLLM's OpenAI-compatible router
+    web_app = fastapi.FastAPI(
+        title=f"OpenAI-compatible {MODEL_NAME} server",
+        description="Run an OpenAI-compatible LLM server with vLLM on modal.com",
+        version="0.0.1",
+        docs_url="/docs",
+    )
+    
+    # Security: CORS
+    http_bearer = fastapi.security.HTTPBearer(
+        scheme_name="Bearer Token",
+        description="See code for authentication details.",
+    )
+    web_app.add_middleware(
+        fastapi.middleware.cors.CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    
+    # Authentication
+    async def is_authenticated(api_key: str = fastapi.Security(http_bearer)):
+        if api_key.credentials != TOKEN:
+            raise fastapi.HTTPException(
+                status_code=fastapi.status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials",
+            )
+        return {"username": "authenticated_user"}
+    
+    router = fastapi.APIRouter(dependencies=[fastapi.Depends(is_authenticated)])
+    router.include_router(api_server.router)
+    web_app.include_router(router)
+    
+    # vLLM engine configuration
+    engine_args = AsyncEngineArgs(
+        model=MODELS_DIR + "/" + MODEL_NAME,
+        tensor_parallel_size=N_GPU,
+        gpu_memory_utilization=0.90,
+        max_model_len=8096,
+        enforce_eager=False,  # Use CUDA graphs for faster inference
+    )
+    
+    engine = AsyncLLMEngine.from_engine_args(
+        engine_args,
+        usage_context=UsageContext.OPENAI_API_SERVER
+    )
+    
+    model_config = get_model_config(engine)
+    request_logger = RequestLogger(max_log_len=2048)
+    base_model_paths = [BaseModelPath(name=MODEL_NAME.split("/")[1], model_path=MODEL_NAME)]
+    
+    # Register OpenAI-compatible endpoints
+    api_server.chat = lambda s: OpenAIServingChat(
+        engine,
+        model_config=model_config,
+        base_model_paths=base_model_paths,
+        chat_template=None,
+        response_role="assistant",
+        lora_modules=[],
+        prompt_adapters=[],
+        request_logger=request_logger,
+    )
+    api_server.completion = lambda s: OpenAIServingCompletion(
+        engine,
+        model_config=model_config,
+        base_model_paths=base_model_paths,
+        lora_modules=[],
+        prompt_adapters=[],
+        request_logger=request_logger,
+    )
+    
+    return web_app
+
+def get_model_config(engine):
+    import asyncio
+    
+    try:
+        event_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        event_loop = None
+    
+    if event_loop is not None and event_loop.is_running():
+        model_config = event_loop.run_until_complete(engine.get_model_config())
+    else:
+        model_config = asyncio.run(engine.get_model_config())
+    
+    return model_config
+```
+
+### Deployment
+
+```bash
+modal deploy no-ocr-llms/llm_serving.py
+```
+
+### OpenAI-Compatible API
+
+The service exposes OpenAI-compatible endpoints:
+
+**POST /v1/chat/completions**
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://yourapp--qwen2-vllm-serve.modal.run/v1",
+    api_key="super-secret-token"
+)
+
+response = client.beta.chat.completions.parse(
+    model="Qwen2-VL-7B-Instruct",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is shown in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/jpeg;base64,..."},
+                },
+            ],
+        }
+    ],
+    response_format=YourPydanticModel,
+    extra_body=dict(guided_decoding_backend="outlines"),
+)
+```
+
+### vLLM Configuration
+
+- **Tensor Parallelism**: 1 GPU (can be increased for larger models)
+- **GPU Memory Utilization**: 90%
+- **Max Model Length**: 8,096 tokens
+- **CUDA Graphs**: Enabled for faster inference (20-30% speedup)
+- **Structured Output**: Supports Pydantic models via Outlines backend
+
+## Resource Management
+
+### Auto-Scaling
+
+Both services use Modal's auto-scaling:
+
+```python
+keep_warm=0,                    # No warm containers
+container_idle_timeout=1 * 60,  # Shut down after 1 minute idle
+allow_concurrent_inputs=1000,   # Handle 1000 concurrent requests per container
+```
+
+**Behavior:**
+- Containers spin up in ~10-15 seconds on first request
+- Warm containers handle requests in less than 1ms
+- Containers shut down after 1 minute of inactivity
+- Multiple containers spawn under high load
+
+### Cost Optimization
+
+- **Scale to zero**: No cost when idle
+- **Shared volume**: Models loaded once, shared across all containers
+- **Efficient precision**: bfloat16 reduces memory usage by 50%
+- **CUDA graphs**: Reduces inference latency and cost per request
+
+## Security
+
+### Authentication
+
+Both services use bearer token authentication:
+
+```python
+TOKEN = "super-secret-token"  # Replace with modal.Secret in production
+
+async def is_authenticated(api_key: str = Security(http_bearer)):
+    if api_key.credentials != TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
+    return {"username": "authenticated_user"}
+```
+
+<Warning>
+**Production Recommendation**: Replace hardcoded tokens with Modal Secrets:
+
+```python
+app = modal.App(
+    "colpali-embedding",
+    secrets=[modal.Secret.from_name("api-token")]
+)
+
+import os
+TOKEN = os.environ["API_TOKEN"]
+```
+</Warning>
+
+### CORS
+
+CORS is configured to allow all origins for development:
+
+```python
+web_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+In production, restrict to your frontend domain.
+
+## Monitoring
+
+### Modal Dashboard
+
+Monitor deployments at https://modal.com/apps:
+
+- Request volume and latency
+- GPU utilization
+- Error rates
+- Cost breakdown
+- Container lifecycle
+
+### Logs
+
+View real-time logs:
+
+```bash
+modal app logs colpali-embedding
+modal app logs qwen2-vllm
+```
+
+### Request Logger
+
+vLLM includes a built-in request logger:
+
+```python
+request_logger = RequestLogger(max_log_len=2048)
+```
+
+Logs include:
+- Input prompts (truncated to 2048 chars)
+- Generation parameters
+- Latency metrics
+- Token counts
+
+## Performance Benchmarks
+
+### ColPali Embedding
+
+- **Text query**: ~50-100ms
+- **Image embedding**: ~200-300ms per image
+- **Throughput**: ~10-20 images/second on A100
+
+### Qwen2-VL Inference
+
+- **Cold start**: ~10-15 seconds (model loading)
+- **Warm inference**: ~500ms-2s per image (depends on prompt length)
+- **Throughput**: ~2-4 images/second for visual QA
+- **Max context**: 8,096 tokens (including image tokens)
+
+## Troubleshooting
+
+### Model Not Found Error
+
+Ensure models are downloaded:
+
+```bash
+modal run no-ocr-llms/llm_serving_load_models.py --model-name vidore/colqwen2-v1.0-merged
+modal run no-ocr-llms/llm_serving_load_models.py --model-name Qwen/Qwen2-VL-7B-Instruct
+```
+
+### Authentication Errors
+
+Verify token matches in both backend `.env` and Modal deployment:
+
+```bash
+# Backend .env
+COLPALI_TOKEN=super-secret-token
+VLLM_API_KEY=super-secret-token
+
+# Modal deployment
+TOKEN = "super-secret-token"
+```
+
+### GPU Memory Errors
+
+Reduce `gpu_memory_utilization` or `max_model_len`:
+
+```python
+engine_args = AsyncEngineArgs(
+    model=MODELS_DIR + "/" + MODEL_NAME,
+    tensor_parallel_size=N_GPU,
+    gpu_memory_utilization=0.85,  # Reduce from 0.90
+    max_model_len=4096,           # Reduce from 8096
+)
+```
+
+## Next Steps
+
+- [Backend Architecture](/architecture/backend) - Learn how the backend calls these services
+- [Architecture Overview](/architecture/overview) - See how all components work together

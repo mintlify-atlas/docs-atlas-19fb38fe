@@ -1,0 +1,302 @@
+---
+title: Docker Deployment
+description: Deploy NoOCR with Docker Compose for production environments
+---
+
+## Overview
+
+Docker deployment provides a production-ready setup with all services containerized and orchestrated via `docker-compose.yml`. This approach ensures consistency across environments and simplifies deployment.
+
+## Architecture
+
+The Docker setup includes three services:
+
+- **api**: FastAPI backend (`no-ocr-api`)
+- **ui**: React frontend (`no-ocr-ui`) 
+- **qdrant**: Vector database for embeddings
+
+## Prerequisites
+
+Before starting, ensure you have:
+
+1. Completed the [prerequisites setup](/deployment/prerequisites)
+2. Created `.env` files in both `no-ocr-api` and `no-ocr-ui` directories
+3. Docker and Docker Compose installed
+
+## Docker Compose Configuration
+
+The `docker-compose.yml` file defines the complete stack:
+
+```yaml
+version: '3.8'
+
+services:
+  ui:
+    build:
+      context: ./no-ocr-ui
+      dockerfile: Dockerfile
+      args:
+        VITE_SUPABASE_URL: ""
+        VITE_SUPABASE_ANON_KEY: ""
+        VITE_REACT_APP_API_URI: "http://localhost:8000"
+    env_file:
+      - ./no-ocr-ui/.env
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+
+  api:
+    build:
+      context: ./no-ocr-api
+      dockerfile: Dockerfile
+    env_file:
+      - ./no-ocr-api/.env
+    volumes:
+      - api-storage:/app/storage
+    ports:
+      - "8000:8000"
+    depends_on:
+      - qdrant
+    environment:
+      QDRANT_HOST: "qdrant"
+      
+  qdrant:
+    image: qdrant/qdrant:v1.12.5
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    ports:
+      - "6333:6333"
+
+volumes:
+  api-storage:
+  qdrant-storage:
+```
+
+## Service Details
+
+### UI Service
+
+<AccordionGroup>
+  <Accordion title="Configuration">
+    - **Port**: 5173 (mapped to host)
+    - **Build Context**: `./no-ocr-ui`
+    - **Environment**: Loaded from `./no-ocr-ui/.env`
+    - **Dependencies**: Requires `api` service to be running
+  </Accordion>
+  
+  <Accordion title="Build Arguments">
+    The UI service accepts build-time arguments for Supabase configuration:
+    - `VITE_SUPABASE_URL`: Your Supabase project URL
+    - `VITE_SUPABASE_ANON_KEY`: Your Supabase anonymous key
+    - `VITE_REACT_APP_API_URI`: Backend API endpoint
+  </Accordion>
+</AccordionGroup>
+
+### API Service
+
+<AccordionGroup>
+  <Accordion title="Configuration">
+    - **Port**: 8000 (mapped to host)
+    - **Build Context**: `./no-ocr-api`
+    - **Environment**: Loaded from `./no-ocr-api/.env`
+    - **Dependencies**: Requires `qdrant` service to be running
+    - **Volumes**: Persistent storage mounted at `/app/storage`
+  </Accordion>
+  
+  <Accordion title="Environment Variables">
+    Key environment variable overrides:
+    - `QDRANT_HOST`: Set to `"qdrant"` to connect to the Qdrant service
+  </Accordion>
+</AccordionGroup>
+
+### Qdrant Service
+
+<AccordionGroup>
+  <Accordion title="Configuration">
+    - **Image**: `qdrant/qdrant:v1.12.5`
+    - **Port**: 6333 (mapped to host)
+    - **Volumes**: Persistent storage at `/qdrant/storage`
+    - **Purpose**: Vector database for document embeddings
+  </Accordion>
+</AccordionGroup>
+
+## Deployment Steps
+
+<Steps>
+  <Step title="Clone the Repository">
+    ```bash
+    git clone https://github.com/kyryl-opens-ml/no-ocr
+    cd no-ocr
+    ```
+  </Step>
+  
+  <Step title="Configure Environment Variables">
+    Ensure both `.env` files are properly configured:
+    
+    **no-ocr-api/.env**:
+    ```bash
+    STORAGE_DIR="storage"
+    CASE_INFO_FILENAME="case_info.json"
+    HF_DATASET_DIRNAME="hf_dataset"
+    SEARCH_TOP_K=3
+    COLPALI_TOKEN="your-modal-token"
+    VLLM_URL="your-vllm-url"
+    COLPALI_BASE_URL="your-colpali-url"
+    VECTOR_SIZE=128
+    ```
+    
+    **no-ocr-ui/.env**:
+    ```bash
+    VITE_SUPABASE_URL="your-supabase-url"
+    VITE_SUPABASE_ANON_KEY="your-supabase-key"
+    VITE_REACT_APP_API_URI="http://localhost:8000"
+    ```
+  </Step>
+  
+  <Step title="Start All Services">
+    Launch the entire stack with a single command:
+    
+    ```bash
+    docker-compose up
+    ```
+    
+    Add the `-d` flag to run in detached mode:
+    
+    ```bash
+    docker-compose up -d
+    ```
+  </Step>
+  
+  <Step title="Verify Services">
+    Check that all services are running:
+    
+    ```bash
+    docker-compose ps
+    ```
+    
+    You should see three services: `api`, `ui`, and `qdrant` with status "Up".
+  </Step>
+  
+  <Step title="Access the Application">
+    - **UI**: [http://localhost:5173](http://localhost:5173)
+    - **API**: [http://localhost:8000](http://localhost:8000)
+    - **API Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
+    - **Qdrant**: [http://localhost:6333](http://localhost:6333)
+  </Step>
+</Steps>
+
+## Managing the Deployment
+
+<CodeGroup>
+```bash Stop Services
+docker-compose down
+```
+
+```bash View Logs
+# All services
+docker-compose logs -f
+
+# Specific service
+docker-compose logs -f api
+```
+
+```bash Rebuild Services
+# Rebuild all services
+docker-compose build
+
+# Rebuild specific service
+docker-compose build api
+
+# Rebuild and restart
+docker-compose up --build
+```
+
+```bash Remove Volumes
+# Stop and remove containers, networks, and volumes
+docker-compose down -v
+```
+</CodeGroup>
+
+## Persistent Data
+
+The Docker setup uses named volumes for persistent storage:
+
+- **api-storage**: Stores uploaded PDFs and generated datasets
+- **qdrant-storage**: Stores vector embeddings and search indices
+
+<Warning>
+  Running `docker-compose down -v` will delete all persistent data. Use this command only when you want to completely reset the application.
+</Warning>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Service Won't Start">
+    **Problem**: A service fails to start or crashes immediately.
+    
+    **Solutions**:
+    - Check logs: `docker-compose logs <service-name>`
+    - Verify `.env` files exist and contain valid values
+    - Ensure ports 5173, 8000, and 6333 are not already in use
+    - Try rebuilding: `docker-compose build --no-cache`
+  </Accordion>
+  
+  <Accordion title="Connection Refused Errors">
+    **Problem**: Services can't communicate with each other.
+    
+    **Solutions**:
+    - Verify `QDRANT_HOST` is set to `"qdrant"` in the API environment
+    - Check that `depends_on` directives are properly configured
+    - Ensure all services are on the same Docker network
+    - Restart the stack: `docker-compose restart`
+  </Accordion>
+  
+  <Accordion title="Build Failures">
+    **Problem**: Docker build fails for API or UI.
+    
+    **Solutions**:
+    - Check that Dockerfiles exist in `no-ocr-api/` and `no-ocr-ui/`
+    - Verify you have sufficient disk space
+    - Try cleaning Docker cache: `docker system prune`
+    - Check for syntax errors in `.env` files
+  </Accordion>
+  
+  <Accordion title="Modal/External Service Errors">
+    **Problem**: API can't connect to Modal LLM endpoints.
+    
+    **Solutions**:
+    - Verify Modal tokens and URLs in `no-ocr-api/.env`
+    - Test Modal endpoints are accessible: `curl $VLLM_URL`
+    - Ensure Modal deployments are active: `modal app list`
+    - Check Modal service logs for errors
+  </Accordion>
+  
+  <Accordion title="Volume Permission Issues">
+    **Problem**: Permission denied errors when accessing volumes.
+    
+    **Solutions**:
+    - Check Docker volume permissions: `docker volume inspect no-ocr_api-storage`
+    - Ensure the API user has write access to `/app/storage`
+    - Try recreating volumes: `docker-compose down -v && docker-compose up`
+  </Accordion>
+</AccordionGroup>
+
+## Production Considerations
+
+<Note>
+  For production deployments, consider the following enhancements:
+  
+  - Use environment-specific compose files (`docker-compose.prod.yml`)
+  - Configure proper resource limits for each service
+  - Set up reverse proxy (nginx) for SSL/TLS termination
+  - Use Docker secrets for sensitive environment variables
+  - Configure log rotation and monitoring
+  - Set up automated backups for volumes
+  - Update `VITE_REACT_APP_API_URI` to your production domain
+</Note>
+
+## Next Steps
+
+- Learn about [development mode](/deployment/development) for local development
+- Review the [architecture documentation](/deployment/overview) for system design details

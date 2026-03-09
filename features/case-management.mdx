@@ -1,0 +1,330 @@
+---
+title: 'Case Management'
+description: 'Learn how to create, manage, and organize document collections (cases) in NoOCR'
+---
+
+## Overview
+
+In NoOCR, a **case** is a collection of PDF documents that are processed together and made searchable. Cases provide a logical grouping for related documents, allowing you to organize and manage your document library efficiently.
+
+Each case contains:
+- Multiple PDF files
+- Converted document pages as a HuggingFace dataset
+- Vector embeddings stored in LanceDB for fast search
+- Metadata about the case (name, status, file list)
+
+<Note>
+  Cases are user-specific. Each user maintains their own collection of cases, ensuring data isolation and privacy.
+</Note>
+
+## Case Creation Workflow
+
+Creating a case involves uploading PDFs and processing them into a searchable format. The workflow follows these steps:
+
+<Steps>
+  <Step title="Upload PDFs">
+    Send PDF files to the `/create_case` endpoint with a unique case name and user ID.
+  </Step>
+  
+  <Step title="Storage">
+    PDFs are stored in the file system at `storage/{user_id}/{case_name}/`.
+  </Step>
+  
+  <Step title="Conversion to Dataset">
+    Each PDF page is converted to a JPEG image (150 DPI) and stored in a HuggingFace dataset along with extracted text and metadata.
+  </Step>
+  
+  <Step title="Vector Embedding">
+    Images are processed with ColPali to generate multi-vector embeddings, which are indexed in LanceDB for visual search.
+  </Step>
+  
+  <Step title="Ready for Search">
+    Once processing completes, the case status updates to "done" and documents become searchable.
+  </Step>
+</Steps>
+
+## Creating a Case
+
+Use the `POST /create_case` endpoint to create a new case and upload PDF documents.
+
+### API Endpoint
+
+```python
+POST /create_case
+```
+
+<ParamField body="user_id" type="string" required>
+  Unique identifier for the user creating the case. Must be alphanumeric with hyphens/underscores only.
+</ParamField>
+
+<ParamField body="case_name" type="string" required>
+  Unique name for this case. Must be alphanumeric with hyphens/underscores only.
+</ParamField>
+
+<ParamField body="files" type="file[]" required>
+  Array of PDF files to upload. Only `.pdf` files are accepted.
+</ParamField>
+
+### Request Example
+
+```python
+import requests
+
+url = "https://your-noocr-instance.com/create_case"
+
+files = [
+    ('files', open('contract.pdf', 'rb')),
+    ('files', open('invoice.pdf', 'rb')),
+    ('files', open('receipt.pdf', 'rb'))
+]
+
+data = {
+    'user_id': 'user_123',
+    'case_name': 'financial_docs_2024'
+}
+
+response = requests.post(url, files=files, data=data)
+print(response.json())
+```
+
+### Response Example
+
+```json
+{
+  "name": "financial_docs_2024",
+  "status": "processing",
+  "number_of_pdfs": 3,
+  "files": [
+    "contract.pdf",
+    "invoice.pdf",
+    "receipt.pdf"
+  ],
+  "case_dir": "storage/user_123/financial_docs_2024"
+}
+```
+
+<Warning>
+  Case creation is asynchronous. The API returns immediately with `status: "processing"`. Poll the `/get_case` endpoint to check when processing is complete (`status: "done"`).
+</Warning>
+
+## How PDF Ingestion Works
+
+The PDF ingestion process is handled by the `pdfs_to_hf_dataset` function in `np_ocr/data.py`:
+
+```python
+def pdfs_to_hf_dataset(path_to_folder):
+    data = []
+    global_index = 0
+
+    folder_path = Path(path_to_folder)
+    pdf_files = list(folder_path.glob("*.pdf"))
+    
+    for pdf_file in tqdm(pdf_files, desc="Processing PDFs"):
+        images, page_texts = get_pdf_images(str(pdf_file))
+
+        for page_number, (image, text) in enumerate(zip(images, page_texts)):
+            data.append({
+                "image": image,
+                "index": global_index,
+                "pdf_name": pdf_file.name,
+                "pdf_page": page_number + 1,
+                "page_text": text,
+            })
+            global_index += 1
+
+    dataset = Dataset.from_list(data)
+    return dataset
+```
+
+**Key points:**
+- PDFs are converted to JPEG images at 150 DPI using `pdf2image`
+- Text is extracted from each page using `pypdf`
+- Each page becomes a row in the HuggingFace dataset
+- Images are stored in PIL format with JPEG optimization
+- A global index tracks all pages across multiple PDFs
+
+See the full implementation in `np_ocr/data.py:36-79`.
+
+## Listing Cases
+
+Retrieve all cases for a specific user with the `GET /get_cases` endpoint.
+
+### API Endpoint
+
+```python
+GET /get_cases?user_id={user_id}
+```
+
+<ParamField query="user_id" type="string" required>
+  User ID to retrieve cases for
+</ParamField>
+
+### Request Example
+
+```bash
+curl "https://your-noocr-instance.com/get_cases?user_id=user_123"
+```
+
+### Response Example
+
+```json
+{
+  "cases": [
+    {
+      "name": "financial_docs_2024",
+      "status": "done",
+      "number_of_pdfs": 3,
+      "files": ["contract.pdf", "invoice.pdf", "receipt.pdf"],
+      "case_dir": "storage/user_123/financial_docs_2024"
+    },
+    {
+      "name": "legal_documents",
+      "status": "processing",
+      "number_of_pdfs": 5,
+      "files": ["agreement.pdf", "terms.pdf", "policy.pdf", "disclosure.pdf", "consent.pdf"],
+      "case_dir": "storage/user_123/legal_documents"
+    }
+  ]
+}
+```
+
+<Note>
+  The response also includes "common cases" - shared cases available to all users, stored in `storage/common_cases/`.
+</Note>
+
+## Getting a Specific Case
+
+Retrieve metadata for a single case using `GET /get_case/{case_name}`.
+
+### API Endpoint
+
+```python
+GET /get_case/{case_name}?user_id={user_id}
+```
+
+### Request Example
+
+```bash
+curl "https://your-noocr-instance.com/get_case/financial_docs_2024?user_id=user_123"
+```
+
+### Response Example
+
+```json
+{
+  "name": "financial_docs_2024",
+  "status": "done",
+  "number_of_pdfs": 3,
+  "files": ["contract.pdf", "invoice.pdf", "receipt.pdf"],
+  "case_dir": "storage/user_123/financial_docs_2024"
+}
+```
+
+## Deleting a Case
+
+Permanently delete a case and all associated files with `DELETE /delete_case/{case_name}`.
+
+### API Endpoint
+
+```python
+DELETE /delete_case/{case_name}?user_id={user_id}
+```
+
+<Warning>
+  This operation is irreversible. All PDFs, datasets, and vector embeddings will be permanently deleted.
+</Warning>
+
+### Request Example
+
+```bash
+curl -X DELETE "https://your-noocr-instance.com/delete_case/financial_docs_2024?user_id=user_123"
+```
+
+### Response Example
+
+```json
+{
+  "message": "Case 'financial_docs_2024' has been deleted."
+}
+```
+
+## Case Processing Implementation
+
+When a case is created, background processing is triggered via FastAPI's `BackgroundTasks`. Here's the implementation from `np_ocr/api.py:241-252`:
+
+```python
+def process_case(case_info: CaseInfo, user_id: str):
+    # Convert PDFs to HuggingFace dataset
+    dataset = pdfs_to_hf_dataset(case_info.case_dir)
+    
+    # Save dataset to disk
+    dataset.save_to_disk(case_info.case_dir / settings.HF_DATASET_DIRNAME)
+    
+    # Generate embeddings and index in LanceDB
+    search_client.ingest(case_info.name, dataset, user_id)
+    
+    # Update case status to "done"
+    case_info.update_status("done")
+```
+
+**Processing steps:**
+1. **PDF to Dataset**: Converts all PDFs to a HuggingFace dataset with images and text
+2. **Persist Dataset**: Saves the dataset to `{case_dir}/hf_dataset/`
+3. **Vector Indexing**: Generates ColPali embeddings and stores them in LanceDB
+4. **Status Update**: Marks the case as ready for search
+
+## Storage Structure
+
+Cases are stored in a hierarchical directory structure:
+
+```
+storage/
+├── {user_id}/
+│   ├── {case_name}/
+│   │   ├── case_info.json          # Case metadata
+│   │   ├── document1.pdf           # Original PDFs
+│   │   ├── document2.pdf
+│   │   ├── hf_dataset/             # HuggingFace dataset
+│   │   │   ├── data-00000-of-00001.arrow
+│   │   │   ├── dataset_info.json
+│   │   │   └── state.json
+│   │   └── {case_name}.lance/      # LanceDB vector index
+│   │       └── data/
+│   └── {another_case}/
+└── common_cases/                    # Shared cases for all users
+    └── {shared_case_name}/
+```
+
+## Security Considerations
+
+NoOCR implements validation to prevent path traversal attacks:
+
+```python
+_SAFE_NAME_RE = re.compile(r"^[\w\-]+$")
+
+def validate_identifier(value: str, field_name: str) -> None:
+    """Ensure simple alphanumeric names to avoid path traversal."""
+    if not _SAFE_NAME_RE.match(value):
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invalid {field_name} provided."
+        )
+```
+
+From `np_ocr/api.py:102-108`.
+
+<Note>
+  Both `user_id` and `case_name` must contain only alphanumeric characters, hyphens, and underscores. Special characters and path separators are rejected.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Visual Search" icon="magnifying-glass" href="/features/visual-search">
+    Learn how to search your cases using natural language queries
+  </Card>
+  
+  <Card title="AI Q&A" icon="comments" href="/features/ai-qa">
+    Ask questions about specific document pages using AI
+  </Card>
+</CardGroup>

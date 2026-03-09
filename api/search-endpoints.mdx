@@ -1,0 +1,336 @@
+---
+title: Search Endpoints
+description: API endpoints for searching through documents using natural language
+---
+
+## Overview
+
+The search endpoint allows you to find relevant pages in your PDF documents using natural language queries. It uses ColPali embeddings to match your query with document images and returns the most relevant pages with similarity scores.
+
+## Search Images by Text
+
+<Badge variant="success">POST</Badge> `/search`
+
+Search for relevant document pages using a text query. Returns the top-K most similar pages with their images encoded as base64.
+
+### Request Parameters
+
+<ParamField path="user_query" type="string" required>
+  The natural language search query. Can be a question, keyword, or description of what you're looking for.
+</ParamField>
+
+<ParamField path="user_id" type="string" required>
+  The unique identifier for the user. Must match the pattern `^[\w\-]+$`.
+</ParamField>
+
+<ParamField path="case_name" type="string" required>
+  The name of the case to search within. The case must be in "done" status.
+</ParamField>
+
+### Response
+
+Returns a `SearchResponse` object:
+
+<ResponseField name="search_results" type="SearchResult[]">
+  Array of search results, ordered by relevance (highest score first). By default, returns top 3 results.
+</ResponseField>
+
+Each `SearchResult` contains:
+
+<ResponseField name="score" type="float">
+  Similarity score indicating how well the page matches the query. Lower scores indicate better matches (distance metric).
+</ResponseField>
+
+<ResponseField name="pdf_name" type="string">
+  The name of the PDF file containing this page.
+</ResponseField>
+
+<ResponseField name="pdf_page" type="integer">
+  The page number within the PDF (1-indexed).
+</ResponseField>
+
+<ResponseField name="image_base64" type="string">
+  The page image encoded as a base64 JPEG string. Decode this to display the image.
+</ResponseField>
+
+### Example Request
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:8000/search \
+  -F "user_query=What are the Q3 revenue figures?" \
+  -F "user_id=user123" \
+  -F "case_name=financial-reports"
+```
+
+```javascript JavaScript
+const formData = new FormData();
+formData.append('user_query', 'What are the Q3 revenue figures?');
+formData.append('user_id', 'user123');
+formData.append('case_name', 'financial-reports');
+
+fetch('http://localhost:8000/search', {
+  method: 'POST',
+  body: formData
+})
+  .then(response => response.json())
+  .then(data => console.log(data));
+```
+
+```python Python
+import requests
+
+data = {
+    'user_query': 'What are the Q3 revenue figures?',
+    'user_id': 'user123',
+    'case_name': 'financial-reports'
+}
+
+response = requests.post(
+    'http://localhost:8000/search',
+    data=data
+)
+print(response.json())
+```
+</CodeGroup>
+
+### Example Response
+
+```json
+{
+  "search_results": [
+    {
+      "score": 0.234,
+      "pdf_name": "Q3_Report.pdf",
+      "pdf_page": 5,
+      "image_base64": "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a..."
+    },
+    {
+      "score": 0.312,
+      "pdf_name": "Q3_Report.pdf",
+      "pdf_page": 12,
+      "image_base64": "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a..."
+    },
+    {
+      "score": 0.389,
+      "pdf_name": "Financial_Summary.pdf",
+      "pdf_page": 3,
+      "image_base64": "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a..."
+    }
+  ]
+}
+```
+
+<Note>
+  The `image_base64` field is truncated in this example for readability. In actual responses, it contains the full base64-encoded JPEG image.
+</Note>
+
+---
+
+## Understanding Search Results
+
+### Similarity Scores
+
+The search uses distance-based similarity metrics:
+- **Lower scores** indicate better matches
+- Scores represent the distance between query and document embeddings in vector space
+- Typically, scores range from 0.0 (perfect match) to 1.0+ (poor match)
+
+### Top-K Results
+
+By default, the API returns the top 3 most relevant pages. This is configured via the `SEARCH_TOP_K` environment variable (default: 3).
+
+### Image Format
+
+Returned images are:
+- **Format**: JPEG
+- **Encoding**: Base64
+- **Color**: RGB
+
+To display the image in HTML:
+```html
+<img src="data:image/jpeg;base64,{image_base64}" />
+```
+
+---
+
+## Use Cases
+
+### Document Q&A
+```
+Query: "What is the total budget for 2024?"
+```
+Returns pages containing budget tables or financial summaries.
+
+### Keyword Search
+```
+Query: "contract termination clause"
+```
+Finds pages discussing contract termination terms.
+
+### Semantic Search
+```
+Query: "risks and mitigation strategies"
+```
+Identifies pages that discuss risks, even if they don't use those exact words.
+
+### Visual Element Search
+```
+Query: "bar chart showing quarterly growth"
+```
+Locates pages with specific types of visualizations.
+
+---
+
+## Processing Images
+
+### Decoding Base64 Images
+
+<CodeGroup>
+```javascript JavaScript
+// Browser
+const img = document.createElement('img');
+img.src = `data:image/jpeg;base64,${result.image_base64}`;
+document.body.appendChild(img);
+
+// Node.js
+const buffer = Buffer.from(result.image_base64, 'base64');
+fs.writeFileSync('output.jpg', buffer);
+```
+
+```python Python
+import base64
+from PIL import Image
+from io import BytesIO
+
+# Decode and open image
+image_data = base64.b64decode(result['image_base64'])
+image = Image.open(BytesIO(image_data))
+image.show()
+
+# Save to file
+with open('output.jpg', 'wb') as f:
+    f.write(image_data)
+```
+</CodeGroup>
+
+---
+
+## SearchResult Model
+
+The `SearchResult` model represents a single search result:
+
+```python
+class SearchResult(BaseModel):
+    score: float
+    pdf_name: str
+    pdf_page: int
+    image_base64: str
+```
+
+### Field Descriptions
+
+- **score**: Distance metric indicating similarity (lower = better match)
+- **pdf_name**: Original filename of the PDF
+- **pdf_page**: 1-indexed page number within the PDF
+- **image_base64**: Base64-encoded JPEG image of the page
+
+## SearchResponse Model
+
+The `SearchResponse` model wraps the search results:
+
+```python
+class SearchResponse(BaseModel):
+    search_results: List[SearchResult]
+```
+
+---
+
+## Error Responses
+
+### 400 Bad Request
+
+**Invalid identifier:**
+```json
+{
+  "detail": "Invalid user_id provided."
+}
+```
+
+**Invalid case name:**
+```json
+{
+  "detail": "Invalid case_name provided."
+}
+```
+
+### 404 Not Found
+
+**No collections found:**
+```json
+{
+  "detail": "No collections found."
+}
+```
+
+**Case info not found:**
+```json
+{
+  "detail": "Case info not found."
+}
+```
+
+**Dataset not found:**
+```json
+{
+  "detail": "Dataset for this case not found."
+}
+```
+
+### 500 Internal Server Error
+
+**Failed to read case info:**
+```json
+{
+  "detail": "Failed to read case info."
+}
+```
+
+**Failed to load dataset:**
+```json
+{
+  "detail": "Failed to load case dataset."
+}
+```
+
+---
+
+## Technical Details
+
+### Embedding Model
+
+The search uses **ColPali** (Column-based Palette), a vision-language model specifically designed for document understanding:
+- Processes document pages as images
+- No OCR required
+- Understands layout, tables, charts, and text
+- Generates dense vector embeddings for similarity search
+
+### Vector Search
+
+Embeddings are stored and searched using **Qdrant**, a vector database optimized for similarity search:
+- Fast approximate nearest neighbor search
+- Filtered search by user_id and case_name
+- Configurable vector size (default: 128 dimensions)
+
+### Performance
+
+Search latency depends on:
+- Number of pages in the case
+- Vector database size
+- Network latency to ColPali embedding service
+
+Typical search times: 0.5-2 seconds for cases with 10-100 pages.
+
+<Tip>
+  For best results, use descriptive queries that include context. Instead of "budget", try "2024 annual budget breakdown by department".
+</Tip>

@@ -1,0 +1,178 @@
+---
+title: Prerequisites
+description: Set up required dependencies and external services before deploying NoOCR
+---
+
+## System Requirements
+
+Before deploying NoOCR, ensure you have the following installed:
+
+<CardGroup cols={3}>
+  <Card title="Python 3.x" icon="python">
+    Required for running the FastAPI backend
+  </Card>
+  <Card title="Node.js 18.x" icon="node">
+    Required for building and running the React UI
+  </Card>
+  <Card title="Docker" icon="docker">
+    Optional, needed only for containerized deployment
+  </Card>
+</CardGroup>
+
+## External Services Setup
+
+NoOCR requires two external services to function properly:
+
+### Supabase (Authentication)
+
+<Steps>
+  <Step title="Create a Supabase Account">
+    Sign up at [https://app.supabase.io/](https://app.supabase.io/)
+  </Step>
+  
+  <Step title="Create a New Project">
+    Once logged in, create a new Supabase project for NoOCR
+  </Step>
+  
+  <Step title="Get Your Credentials">
+    Navigate to your project settings and copy:
+    - Project URL (SUPABASE_URL)
+    - Anon/Public Key (SUPABASE_ANON_KEY)
+  </Step>
+  
+  <Step title="Configure Environment Variables">
+    Create a `.env` file in the `no-ocr-ui` directory:
+    
+    ```bash
+    VITE_SUPABASE_URL="your-project-url"
+    VITE_SUPABASE_ANON_KEY="your-anon-key"
+    VITE_REACT_APP_API_URI="http://localhost:8000"
+    ```
+  </Step>
+</Steps>
+
+### Modal (LLM Serving)
+
+<Steps>
+  <Step title="Create a Modal Account">
+    Sign up at [https://modal.com/](https://modal.com/)
+  </Step>
+  
+  <Step title="Install and Configure Modal CLI">
+    Install the Modal client and authenticate:
+    
+    ```bash
+    pip install modal
+    modal setup
+    ```
+    
+    Follow the prompts to authenticate with your Modal account.
+  </Step>
+  
+  <Step title="Load the Qwen2-VL Model">
+    Deploy the Qwen2-VL-7B model for visual question answering:
+    
+    ```bash
+    modal run no-ocr-llms/llm_serving_load_models.py \
+      --model-name Qwen/Qwen2-VL-7B-Instruct \
+      --model-revision 51c47430f97dd7c74aa1fa6825e68a813478097f
+    ```
+    
+    This command downloads and caches the model in Modal's infrastructure.
+  </Step>
+  
+  <Step title="Load the ColPali Model">
+    Deploy the ColPali model for document embeddings:
+    
+    ```bash
+    modal run no-ocr-llms/llm_serving_load_models.py \
+      --model-name vidore/colqwen2-v1.0-merged \
+      --model-revision 364a4f5df97231e233e15cbbaf0b9dbe352ba92c
+    ```
+  </Step>
+  
+  <Step title="Deploy the LLM Services">
+    Deploy both serving endpoints:
+    
+    ```bash
+    modal deploy no-ocr-llms/llm_serving.py
+    modal deploy no-ocr-llms/llm_serving_colpali.py
+    ```
+    
+    After deployment, Modal will provide URLs for each service.
+  </Step>
+  
+  <Step title="Configure API Environment Variables">
+    Create a `.env` file in the `no-ocr-api` directory and add your Modal credentials:
+    
+    ```bash
+    COLPALI_TOKEN="your-modal-token"
+    COLPALI_BASE_URL="your-colpali-endpoint-url"
+    VLLM_URL="your-vllm-endpoint-url"
+    VLLM_API_KEY="your-modal-token"
+    ```
+  </Step>
+</Steps>
+
+## Environment Variables Reference
+
+### API Environment Variables
+
+Create `no-ocr-api/.env` with the following variables:
+
+```bash
+# Storage configuration
+STORAGE_DIR="storage"
+CASE_INFO_FILENAME="case_info.json"
+HF_DATASET_DIRNAME="hf_dataset"
+
+# Search configuration
+SEARCH_TOP_K=3
+VECTOR_SIZE=128
+
+# Modal LLM endpoints
+COLPALI_TOKEN="your-modal-token"
+COLPALI_BASE_URL="your-colpali-modal-url"
+VLLM_URL="your-qwen-modal-url"
+VLLM_API_KEY="your-modal-token"
+
+# Qdrant configuration (for Docker deployment)
+QDRANT_HOST="qdrant"  # Use "localhost" for dev mode
+```
+
+### UI Environment Variables
+
+Create `no-ocr-ui/.env` with the following variables:
+
+```bash
+# Supabase configuration
+VITE_SUPABASE_URL="your-supabase-project-url"
+VITE_SUPABASE_ANON_KEY="your-supabase-anon-key"
+
+# API endpoint
+VITE_REACT_APP_API_URI="http://localhost:8000"
+```
+
+<Note>
+  For production deployments, update `VITE_REACT_APP_API_URI` to point to your production API URL.
+</Note>
+
+## Verification
+
+Before proceeding with deployment, verify:
+
+<Accordion title="Checklist">
+  - [ ] Python 3.x is installed: `python --version`
+  - [ ] Node.js 18.x is installed: `node --version`
+  - [ ] Docker is installed (if using Docker): `docker --version`
+  - [ ] Modal CLI is authenticated: `modal token list`
+  - [ ] Both LLM models are deployed to Modal
+  - [ ] `.env` files are created in both `no-ocr-api` and `no-ocr-ui` directories
+  - [ ] All environment variables are populated with valid values
+</Accordion>
+
+## Next Steps
+
+Once prerequisites are complete, proceed to:
+- [Docker Deployment](/deployment/docker) for production setup
+- [Development Setup](/deployment/development) for local development

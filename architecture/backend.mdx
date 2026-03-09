@@ -1,0 +1,561 @@
+---
+title: "Backend Architecture"
+description: "FastAPI backend implementation details"
+icon: "server"
+---
+
+## Overview
+
+The NoOCR backend is a FastAPI application that handles PDF ingestion, vector search, and LLM orchestration. The codebase is organized in the `no-ocr-api/np_ocr/` directory.
+
+## Module Structure
+
+The backend consists of three main modules:
+
+<CardGroup cols={3}>
+  <Card title="api.py" icon="code">
+    FastAPI routes, request handling, and background tasks
+  </Card>
+  <Card title="search.py" icon="magnifying-glass">
+    Vector search, ColPali client, and vLLM integration
+  </Card>
+  <Card title="data.py" icon="database">
+    PDF processing and Hugging Face dataset creation
+  </Card>
+</CardGroup>
+
+## Configuration (Settings)
+
+The application uses Pydantic Settings for environment-based configuration:
+
+```python
+class Settings(BaseSettings):
+    STORAGE_DIR: str = "storage"
+    CASE_INFO_FILENAME: str = "case_info.json"
+    HF_DATASET_DIRNAME: str = "hf_dataset"
+    SEARCH_TOP_K: int = 3
+    COLPALI_TOKEN: str
+    VLLM_URL: str
+    COLPALI_BASE_URL: str
+    VECTOR_SIZE: int = 128
+    VLLM_API_KEY: str
+    VLLM_MODEL: str = "Qwen2-VL-7B-Instruct"
+
+    class Config:
+        env_file = ".env"
+```
+
+**Environment Variables:**
+
+- `STORAGE_DIR`: Root directory for storing cases and datasets (default: "storage")
+- `CASE_INFO_FILENAME`: JSON file storing case metadata
+- `HF_DATASET_DIRNAME`: Directory name for Hugging Face datasets
+- `SEARCH_TOP_K`: Number of top results to return (default: 3)
+- `COLPALI_TOKEN`: Authentication token for ColPali service
+- `COLPALI_BASE_URL`: URL of the ColPali embedding service (Modal endpoint)
+- `VLLM_URL`: URL of the vLLM service (Modal endpoint)
+- `VLLM_API_KEY`: Authentication key for vLLM service
+- `VLLM_MODEL`: Model name for vision-language inference
+- `VECTOR_SIZE`: Dimension of ColPali embeddings (128)
+
+Create a `.env` file in the `no-ocr-api` directory with these values. See `.env.example` for a template.
+
+## API Routes
+
+### POST /create_case
+
+Creates a new case and processes uploaded PDFs in the background.
+
+**Source:** `no-ocr-api/np_ocr/api.py:256`
+
+```python
+@app.post("/create_case")
+def create_new_case(
+    user_id: str = Form(...),
+    files: List[UploadFile] = File(...),
+    case_name: str = Form(...),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+) -> CaseInfo:
+    # Validate inputs
+    validate_identifier(user_id, "user_id")
+    validate_identifier(case_name, "case_name")
+    
+    # Create case directory
+    case_dir = Path(f"{settings.STORAGE_DIR}/{user_id}/{case_name}")
+    case_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save uploaded PDFs
+    file_names = []
+    for uploaded_file in files:
+        filename = os.path.basename(uploaded_file.filename)
+        if not filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail=f"Unsupported file type: {filename}")
+        file_path = case_dir / filename
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.file.read())
+        file_names.append(filename)
+    
+    # Create case info
+    case_info = CaseInfo(
+        name=case_name,
+        status="processing",
+        number_of_pdfs=len(files),
+        files=file_names,
+        case_dir=case_dir,
+    )
+    case_info.save()
+    
+    # Schedule background processing
+    background_tasks.add_task(process_case, case_info=case_info, user_id=user_id)
+    
+    return case_info
+```
+
+**Flow:**
+1. Validate user_id and case_name (alphanumeric only to prevent path traversal)
+2. Create directory structure: `storage/{user_id}/{case_name}/`
+3. Save uploaded PDF files
+4. Create case metadata with status "processing"
+5. Add background task for PDF processing
+6. Return case info immediately
+
+### POST /search
+
+Performs semantic search across document pages in a case.
+
+**Source:** `no-ocr-api/np_ocr/api.py:169`
+
+```python
+@app.post("/search", response_model=SearchResponse)
+def ai_search(user_query: str = Form(...), user_id: str = Form(...), case_name: str = Form(...)):
+    validate_identifier(user_id, "user_id")
+    validate_identifier(case_name, "case_name")
+    
+    # Search using ColPali embeddings
+    search_results = search_client.search_images_by_text(
+        user_query,
+        case_name=case_name,
+        user_id=user_id,
+        top_k=settings.SEARCH_TOP_K,
+    )
+    
+    # Load dataset to retrieve images
+    dataset_path = os.path.join(settings.STORAGE_DIR, user_id, case_name, settings.HF_DATASET_DIRNAME)
+    dataset = load_from_disk(dataset_path)
+    
+    # Build response with base64-encoded images
+    search_results_data = []
+    for point in search_results:
+        score = point["_distance"]
+        index = point["index"]
+        image_data = dataset[index]["image"]
+        pdf_name = dataset[index]["pdf_name"]
+        pdf_page = dataset[index]["pdf_page"]
+        
+        # Convert image to base64
+        buffered = BytesIO()
+        image_data.save(buffered, format="JPEG")
+        img_b64_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+        
+        search_results_data.append(SearchResult(
+            score=score,
+            pdf_name=pdf_name,
+            pdf_page=pdf_page,
+            image_base64=img_b64_str
+        ))
+    
+    return SearchResponse(search_results=search_results_data)
+```
+
+**Returns:** List of search results with:
+- `score`: Similarity score (lower is better for cosine distance)
+- `pdf_name`: Source PDF filename
+- `pdf_page`: Page number (1-indexed)
+- `image_base64`: JPEG image encoded as base64 string
+
+### POST /vllm_call
+
+Processes a specific page image with the vision-language model.
+
+**Source:** `no-ocr-api/np_ocr/api.py:119`
+
+```python
+@app.post("/vllm_call")
+def vllm_call(
+    user_query: str = Form(...),
+    user_id: str = Form(...),
+    case_name: str = Form(...),
+    pdf_name: str = Form(...),
+    pdf_page: int = Form(...),
+) -> ImageAnswer:
+    # Load dataset
+    dataset_path = os.path.join(settings.STORAGE_DIR, user_id, case_name, settings.HF_DATASET_DIRNAME)
+    dataset = load_from_disk(dataset_path)
+    
+    # Find matching image
+    image_data = None
+    for data in dataset:
+        if data["pdf_name"] == pdf_name and data["pdf_page"] == pdf_page:
+            image_data = data["image"]
+            break
+    
+    if image_data is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+    
+    # Call vLLM
+    image_answer = call_vllm(image_data, user_query, settings.VLLM_URL, settings.VLLM_API_KEY, settings.VLLM_MODEL)
+    
+    return image_answer
+```
+
+### GET /get_cases
+
+Returns all cases for a user, including common/shared cases.
+
+**Source:** `no-ocr-api/np_ocr/api.py:306`
+
+### GET /get_case/{case_name}
+
+Returns metadata for a specific case.
+
+**Source:** `no-ocr-api/np_ocr/api.py:358`
+
+### DELETE /delete_case/{case_name}
+
+Deletes a case and all associated data.
+
+**Source:** `no-ocr-api/np_ocr/api.py:378`
+
+### GET /health
+
+Health check endpoint.
+
+**Source:** `no-ocr-api/np_ocr/api.py:406`
+
+## Background Processing
+
+The `process_case` function runs asynchronously after case creation:
+
+```python
+def process_case(case_info: CaseInfo, user_id: str):
+    # Convert PDFs to Hugging Face dataset
+    dataset = pdfs_to_hf_dataset(case_info.case_dir)
+    
+    # Save dataset to disk
+    dataset.save_to_disk(case_info.case_dir / settings.HF_DATASET_DIRNAME)
+    
+    # Ingest into vector database
+    search_client.ingest(case_info.name, dataset, user_id)
+    
+    # Update status
+    case_info.update_status("done")
+```
+
+**Steps:**
+1. **PDF to Dataset**: Convert PDFs to images using `pdfs_to_hf_dataset`
+2. **Save Dataset**: Persist the Hugging Face dataset to disk
+3. **Vector Ingestion**: Generate embeddings and store in LanceDB
+4. **Status Update**: Mark case as "done"
+
+## SearchClient Class
+
+Manages vector search and embedding generation.
+
+**Source:** `no-ocr-api/np_ocr/search.py:67`
+
+```python
+class SearchClient:
+    def __init__(self, storage_dir: str, vector_size: int, base_url: str, token: str):
+        self.storage_dir = storage_dir
+        self.vector_size = vector_size
+        self.colpali_client = ColPaliClient(base_url, token)
+    
+    def ingest(self, case_name: str, dataset, user_id: str, batch_size: int = 50):
+        """Ingest a dataset of images into LanceDB in batches."""
+        # Create LanceDB schema
+        schema = pa.schema([
+            pa.field("index", pa.int64()),
+            pa.field("pdf_name", pa.string()),
+            pa.field("pdf_page", pa.int64()),
+            pa.field("vector", pa.list_(pa.list_(pa.float32(), self.vector_size))),
+        ])
+        
+        # Connect to LanceDB
+        lance_client = lancedb.connect(f"{self.storage_dir}/{user_id}/{case_name}")
+        tbl = lance_client.create_table(case_name, schema=schema)
+        
+        # Process in batches
+        with tqdm(total=len(dataset), desc="Indexing Progress") as pbar:
+            batch = []
+            for i in range(len(dataset)):
+                image = dataset[i]["image"]
+                response = self.colpali_client.process_pil_image(image)
+                image_embedding = response["embedding"]
+                
+                batch.append({
+                    "index": dataset[i]["index"],
+                    "pdf_name": dataset[i]["pdf_name"],
+                    "pdf_page": dataset[i]["pdf_page"],
+                    "vector": image_embedding,
+                })
+                
+                if len(batch) >= batch_size:
+                    tbl.add(batch)
+                    batch = []
+                pbar.update(1)
+            
+            if batch:
+                tbl.add(batch)
+        
+        # Create cosine similarity index
+        tbl.create_index(metric="cosine")
+    
+    def search_images_by_text(self, query_text, case_name: str, user_id: str, top_k: int):
+        """Search for images using text query."""
+        # Connect to LanceDB
+        lance_client = lancedb.connect(f"{self.storage_dir}/{user_id}/{case_name}")
+        tbl = lance_client.open_table(case_name)
+        
+        # Get query embedding
+        query_embedding = self.colpali_client.query_text(query_text)
+        multivector_query = np.array(query_embedding["embedding"])
+        
+        # Perform search
+        search_result = tbl.search(multivector_query).limit(top_k).select(["index", "pdf_name", "pdf_page"]).to_list()
+        
+        return search_result
+```
+
+## ColPaliClient Class
+
+HTTP client for the ColPali embedding service.
+
+**Source:** `no-ocr-api/np_ocr/search.py:42`
+
+```python
+class ColPaliClient:
+    def __init__(self, base_url: str, token: str):
+        self.base_url = base_url
+        self.headers = {"Authorization": f"Bearer {token}"}
+    
+    def query_text(self, query_text: str):
+        """Generate embedding for text query."""
+        response = requests.post(
+            f"{self.base_url}/query",
+            headers=self.headers,
+            params={"query_text": query_text}
+        )
+        response.raise_for_status()
+        return response.json()
+    
+    def process_pil_image(self, pil_image):
+        """Generate embedding for PIL image."""
+        buffered = io.BytesIO()
+        pil_image.save(buffered, format="JPEG")
+        files = {"image": buffered.getvalue()}
+        response = requests.post(
+            f"{self.base_url}/process_image",
+            files=files,
+            headers=self.headers
+        )
+        response.raise_for_status()
+        return response.json()
+```
+
+## vLLM Integration
+
+The `call_vllm` function integrates with the Qwen2-VL vision-language model.
+
+**Source:** `no-ocr-api/np_ocr/search.py:142`
+
+```python
+def call_vllm(image_data: PIL.Image.Image, user_query: str, base_url: str, api_key: str, model: str) -> ImageAnswer:
+    prompt = f"""
+    Based on the user's query:
+    ###
+    {user_query}
+    ###
+
+    and the provided image, determine if the image contains enough information to answer the query.
+    If it does, provide the most accurate answer possible based on the image.
+    If it does not, respond with the exact phrase "NA".
+
+    Please return your response in valid JSON with the structure:
+    {{
+        "answer": "Answer text or NA"
+    }}
+    """
+    
+    # Resize image to reduce token usage
+    buffered = BytesIO()
+    max_size = (512, 512)
+    image_data.thumbnail(max_size)
+    image_data.save(buffered, format="JPEG")
+    img_b64_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+    
+    # Call vLLM with structured output
+    client = OpenAI(base_url=base_url, api_key=api_key)
+    completion = client.beta.chat.completions.parse(
+        model=model,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{img_b64_str}"},
+                    },
+                ],
+            }
+        ],
+        response_format=ImageAnswer,
+        extra_body=dict(guided_decoding_backend="outlines"),
+    )
+    
+    return completion.choices[0].message.parsed
+```
+
+**Key Features:**
+- Uses OpenAI client library for compatibility
+- Structured output with Pydantic models
+- Guided decoding via Outlines backend
+- Image resizing to 512x512 for efficiency
+
+## PDF Processing (data.py)
+
+The `pdfs_to_hf_dataset` function converts PDFs to a Hugging Face dataset.
+
+**Source:** `no-ocr-api/np_ocr/data.py:36`
+
+```python
+def pdfs_to_hf_dataset(path_to_folder):
+    data = []
+    global_index = 0
+    
+    folder_path = Path(path_to_folder)
+    pdf_files = list(folder_path.glob("*.pdf"))
+    
+    for pdf_file in tqdm(pdf_files, desc="Processing PDFs"):
+        # Convert PDF to images
+        images, page_texts = get_pdf_images(str(pdf_file))
+        
+        for page_number, (image, text) in enumerate(zip(images, page_texts)):
+            data.append({
+                "image": image,
+                "index": global_index,
+                "pdf_name": pdf_file.name,
+                "pdf_page": page_number + 1,
+                "page_text": text,
+            })
+            global_index += 1
+    
+    dataset = Dataset.from_list(data)
+    return dataset
+
+def get_pdf_images(pdf_path):
+    """Extract images and text from PDF."""
+    # Extract text
+    reader = PdfReader(pdf_path)
+    page_texts = []
+    for page_number in range(len(reader.pages)):
+        page = reader.pages[page_number]
+        text = page.extract_text()
+        page_texts.append(text)
+    
+    # Convert to images
+    images = convert_from_path(
+        pdf_path,
+        dpi=150,
+        fmt="jpeg",
+        jpegopt={"quality": 100, "progressive": True, "optimize": True}
+    )
+    
+    return images, page_texts
+```
+
+**Configuration:**
+- DPI: 150 (balance between quality and size)
+- Format: JPEG with progressive encoding
+- Quality: 100 (maximum)
+- Text extraction: Via pypdf for metadata
+
+## Security
+
+### Input Validation
+
+All user inputs are validated to prevent path traversal attacks:
+
+```python
+_SAFE_NAME_RE = re.compile(r"^[\w\-]+$")
+
+def validate_identifier(value: str, field_name: str) -> None:
+    """Ensure simple alphanumeric names to avoid path traversal."""
+    if not _SAFE_NAME_RE.match(value):
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name} provided.")
+```
+
+Only alphanumeric characters, underscores, and hyphens are allowed in:
+- user_id
+- case_name
+- pdf_name
+
+### CORS Configuration
+
+```python
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+<Warning>
+In production, replace `allow_origins=["*"]` with your specific frontend domain.
+</Warning>
+
+## Logging
+
+The backend uses structured JSON logging for Railway deployment:
+
+```python
+class CustomRailwayLogFormatter(logging.Formatter):
+    def format(self, record):
+        log_record = {
+            "time": self.formatTime(record),
+            "level": record.levelname,
+            "message": record.getMessage()
+        }
+        return json.dumps(log_record)
+```
+
+All API endpoints log:
+- Start time
+- Duration
+- Key operations
+
+## Running Tests
+
+```bash
+# From repository root
+pytest
+
+# Run specific test file
+pytest no-ocr-api/tests/test_api.py
+
+# With coverage
+pytest --cov=np_ocr
+```
+
+Tests require a `.env` file with valid credentials. For local testing without Modal services, use the mock ColPali server:
+
+```bash
+uvicorn no-ocr-api/tests/mock_colpali:app --port 8000 &
+```
+
+## Next Steps
+
+- [Frontend Architecture](/architecture/frontend) - Learn how the React UI connects to these endpoints
+- [LLM Serving](/architecture/llm-serving) - Understand the Modal-based embedding and inference services
