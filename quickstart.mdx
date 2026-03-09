@@ -216,21 +216,12 @@ services:
     build: ./no-ocr-api
     ports:
       - "8000:8000"
-    depends_on:
-      - qdrant
     volumes:
       - api-storage:/app/storage
-  
-  qdrant:
-    image: qdrant/qdrant:v1.12.5
-    ports:
-      - "6333:6333"
-    volumes:
-      - qdrant-storage:/qdrant/storage
 ```
 
 <Note>
-The Docker setup includes Qdrant, but NoOCR currently uses LanceDB. Qdrant support may be added in future versions.
+NoOCR uses LanceDB for vector storage, which is file-based and stores indices in the `api-storage` volume.
 </Note>
 
 ### Development Mode

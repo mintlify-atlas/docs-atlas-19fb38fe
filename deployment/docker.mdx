@@ -9,11 +9,10 @@ Docker deployment provides a production-ready setup with all services containeri
 
 ## Architecture
 
-The Docker setup includes three services:
+The Docker setup includes two services:
 
-- **api**: FastAPI backend (`no-ocr-api`)
-- **ui**: React frontend (`no-ocr-ui`) 
-- **qdrant**: Vector database for embeddings
+- **api**: FastAPI backend (`no-ocr-api`) with integrated LanceDB vector storage
+- **ui**: React frontend (`no-ocr-ui`)
 
 ## Prerequisites
 
@@ -56,21 +55,9 @@ services:
       - api-storage:/app/storage
     ports:
       - "8000:8000"
-    depends_on:
-      - qdrant
-    environment:
-      QDRANT_HOST: "qdrant"
-      
-  qdrant:
-    image: qdrant/qdrant:v1.12.5
-    volumes:
-      - qdrant-storage:/qdrant/storage
-    ports:
-      - "6333:6333"
 
 volumes:
   api-storage:
-  qdrant-storage:
 ```
 
 ## Service Details
@@ -100,24 +87,14 @@ volumes:
     - **Port**: 8000 (mapped to host)
     - **Build Context**: `./no-ocr-api`
     - **Environment**: Loaded from `./no-ocr-api/.env`
-    - **Dependencies**: Requires `qdrant` service to be running
-    - **Volumes**: Persistent storage mounted at `/app/storage`
+    - **Volumes**: Persistent storage mounted at `/app/storage` (includes LanceDB vector indices)
   </Accordion>
   
-  <Accordion title="Environment Variables">
-    Key environment variable overrides:
-    - `QDRANT_HOST`: Set to `"qdrant"` to connect to the Qdrant service
-  </Accordion>
-</AccordionGroup>
-
-### Qdrant Service
-
-<AccordionGroup>
-  <Accordion title="Configuration">
-    - **Image**: `qdrant/qdrant:v1.12.5`
-    - **Port**: 6333 (mapped to host)
-    - **Volumes**: Persistent storage at `/qdrant/storage`
-    - **Purpose**: Vector database for document embeddings
+  <Accordion title="Vector Storage">
+    The API service uses **LanceDB**, a file-based vector database:
+    - Vector indices are stored in the mounted `/app/storage` volume
+    - Each case gets its own LanceDB database directory
+    - No separate vector database service is required
   </Accordion>
 </AccordionGroup>
 
@@ -175,14 +152,13 @@ volumes:
     docker-compose ps
     ```
     
-    You should see three services: `api`, `ui`, and `qdrant` with status "Up".
+    You should see two services: `api` and `ui` with status "Up".
   </Step>
   
   <Step title="Access the Application">
     - **UI**: [http://localhost:5173](http://localhost:5173)
     - **API**: [http://localhost:8000](http://localhost:8000)
     - **API Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
-    - **Qdrant**: [http://localhost:6333](http://localhost:6333)
   </Step>
 </Steps>
 
@@ -220,10 +196,9 @@ docker-compose down -v
 
 ## Persistent Data
 
-The Docker setup uses named volumes for persistent storage:
+The Docker setup uses a named volume for persistent storage:
 
-- **api-storage**: Stores uploaded PDFs and generated datasets
-- **qdrant-storage**: Stores vector embeddings and search indices
+- **api-storage**: Stores uploaded PDFs, generated HuggingFace datasets, and LanceDB vector indices
 
 <Warning>
   Running `docker-compose down -v` will delete all persistent data. Use this command only when you want to completely reset the application.
@@ -238,17 +213,17 @@ The Docker setup uses named volumes for persistent storage:
     **Solutions**:
     - Check logs: `docker-compose logs <service-name>`
     - Verify `.env` files exist and contain valid values
-    - Ensure ports 5173, 8000, and 6333 are not already in use
+    - Ensure ports 5173 and 8000 are not already in use
     - Try rebuilding: `docker-compose build --no-cache`
   </Accordion>
   
   <Accordion title="Connection Refused Errors">
-    **Problem**: Services can't communicate with each other.
+    **Problem**: UI can't connect to API.
     
     **Solutions**:
-    - Verify `QDRANT_HOST` is set to `"qdrant"` in the API environment
-    - Check that `depends_on` directives are properly configured
-    - Ensure all services are on the same Docker network
+    - Verify `VITE_REACT_APP_API_URI` is set correctly in UI `.env`
+    - Check that the API service is running: `docker-compose logs api`
+    - Ensure both services are on the same Docker network
     - Restart the stack: `docker-compose restart`
   </Accordion>
   

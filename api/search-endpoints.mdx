@@ -317,10 +317,10 @@ The search uses **ColPali** (Column-based Palette), a vision-language model spec
 
 ### Vector Search
 
-Embeddings are stored and searched using **Qdrant**, a vector database optimized for similarity search:
-- Fast approximate nearest neighbor search
-- Filtered search by user_id and case_name
-- Configurable vector size (default: 128 dimensions)
+Embeddings are stored and searched using **LanceDB**, a file-based vector database optimized for multi-modal AI:
+- Fast approximate nearest neighbor search with disk-based indices
+- Each case has its own LanceDB table
+- Configurable vector size (default: 128 dimensions per multi-vector embedding)
 
 ### Performance
 

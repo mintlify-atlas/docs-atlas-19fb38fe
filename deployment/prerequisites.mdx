@@ -110,6 +110,7 @@ NoOCR requires two external services to function properly:
     COLPALI_BASE_URL="your-colpali-endpoint-url"
     VLLM_URL="your-vllm-endpoint-url"
     VLLM_API_KEY="your-modal-token"
+    VLLM_MODEL="Qwen2-VL-7B-Instruct"  # Optional, defaults to Qwen2-VL-7B-Instruct
     ```
   </Step>
 </Steps>
@@ -135,9 +136,7 @@ COLPALI_TOKEN="your-modal-token"
 COLPALI_BASE_URL="your-colpali-modal-url"
 VLLM_URL="your-qwen-modal-url"
 VLLM_API_KEY="your-modal-token"
-
-# Qdrant configuration (for Docker deployment)
-QDRANT_HOST="qdrant"  # Use "localhost" for dev mode
+VLLM_MODEL="Qwen2-VL-7B-Instruct"  # Optional, defaults to Qwen2-VL-7B-Instruct
 ```
 
 ### UI Environment Variables

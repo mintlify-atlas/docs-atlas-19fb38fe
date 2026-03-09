@@ -23,18 +23,16 @@ NoOCR consists of three main components:
 ```mermaid
 graph TB
     UI[no-ocr-ui<br/>React + Vite] --> API[no-ocr-api<br/>FastAPI]
-    API --> Qdrant[Qdrant<br/>Vector Database]
+    API --> LanceDB[LanceDB<br/>File-Based Vector Store]
     API --> Modal[Modal LLMs<br/>Qwen2-VL + ColPali]
     UI --> Supabase[Supabase<br/>Authentication]
-    API --> LanceDB[LanceDB<br/>Local Vector Store]
 ```
 
 ### Core Services
 
 - **no-ocr-ui**: React-based frontend built with Vite and TypeScript
 - **no-ocr-api**: FastAPI backend that handles PDF processing and search
-- **Qdrant**: Vector database for storing document embeddings (Docker deployment)
-- **LanceDB**: Local vector storage alternative (Development mode)
+- **LanceDB**: File-based vector database for storing document embeddings (integrated into API service)
 
 ### External Services
 
@@ -49,9 +47,9 @@ graph TB
     - Production environments
     - Team collaboration with consistent environments
     - Easy scaling and service orchestration
-    - Complete isolation with Qdrant vector database included
+    - Complete isolation with containerized services
     
-    All services run in containers with proper networking and volume management.
+    All services run in containers with proper networking and volume management for persistent storage.
   </Accordion>
 
   <Accordion title="Use Development Mode for Local Work">
